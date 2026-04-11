@@ -26,6 +26,7 @@ import NavBar from './components/NavBar';
 import BottomNav from './components/BottomNav';
 import FABReport from './components/FABReport';
 import AlertBanner from './modules/alerts/AlertBanner';
+import EmergencyContacts from './modules/contacts/EmergencyContacts';
 
 // Protected Route Wrapper
 const ProtectedRoute = ({ children, allowedRoles }) => {
@@ -74,6 +75,7 @@ function AppRoutes() {
           <Route path="/dashboard" element={<ProtectedRoute allowedRoles={['officer', 'admin']}><OfficerDashboard /></ProtectedRoute>} />
 
           <Route path="/guide" element={<ProtectedRoute><UserGuide /></ProtectedRoute>} />
+          <Route path="/contacts" element={<ProtectedRoute><EmergencyContacts /></ProtectedRoute>} />
 
           <Route path="/alerts" element={<ProtectedRoute><AlertHistory /></ProtectedRoute>} />
           <Route path="/alerts/settings" element={<ProtectedRoute><AlertSettings /></ProtectedRoute>} />

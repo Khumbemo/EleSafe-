@@ -11,7 +11,8 @@ export default function FABReport() {
   }
 
   return (
-    <div className="fixed bottom-[80px] right-4 z-50 flex flex-col gap-3 items-end pb-safe">
+    <div className="fixed bottom-[80px] left-0 right-0 z-50 mb-safe max-w-md mx-auto relative pointer-events-none">
+      <div className="absolute right-4 bottom-0 flex flex-col gap-3 items-end pointer-events-auto">
       <button
         onClick={() => navigate('/report/full')}
         className="bg-white text-forest-600 w-12 h-12 rounded-full shadow-lg border-2 border-forest-600 flex items-center justify-center font-bold"
@@ -26,6 +27,7 @@ export default function FABReport() {
         <span className="text-2xl">🐘</span>
         <span className="font-bold tracking-wide">REPORT</span>
       </button>
+      </div>
     </div>
   );
 }
