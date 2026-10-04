@@ -10,14 +10,15 @@ from urllib.parse import urlsplit
 from .api import App
 
 WEB = Path(__file__).with_name("web")
-MAX_BODY = 64 * 1024
+MAX_BODY = 20 * 1024 * 1024  # 6 photos + 2 voice notes at their size limits, as base64
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
+    "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(self)",
     "Content-Security-Policy": (
         "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'"
+        "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-ancestors 'none'"
     ),
 }
 

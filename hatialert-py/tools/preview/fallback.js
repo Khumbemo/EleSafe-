@@ -24,6 +24,7 @@ function createFallbackEngine(SEED, opts = {}) {
     incidents: SEED.incidents.map((i) => ({ ...i, created_at: base + i.created_at, updated_at: base + i.updated_at })),
     events: SEED.events.map((e) => ({ ...e, at: base + e.at })),
     alerts: SEED.alerts.map((a) => ({ ...a, sent_at: base + a.sent_at })),
+    attachments: [],
   };
   const nextId = (t) => db[t].reduce((m, r) => Math.max(m, r.id), 0) + 1;
   const failures = {};
@@ -98,6 +99,47 @@ function createFallbackEngine(SEED, opts = {}) {
     if (!/^[6-9]\d{9}$/.test(d)) throw new E(400, "Enter a 10-digit mobile number.", "phone");
     return d;
   }
+  // media: same rules as domain.MEDIA / api._media
+  const MEDIA = M.media;
+  function sniff(b) {
+    const s4 = String.fromCharCode(...b.slice(0, 4)), s8_12 = String.fromCharCode(...b.slice(8, 12));
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+    if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((x, k) => b[k] === x)) return "image/png";
+    if (s4 === "RIFF" && s8_12 === "WEBP") return "image/webp";
+    if (s4 === "RIFF" && s8_12 === "WAVE") return "audio/wav";
+    if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "audio/webm";
+    if (s4 === "OggS") return "audio/ogg";
+    if (String.fromCharCode(...b.slice(4, 8)) === "ftyp") return "audio/mp4";
+    if (String.fromCharCode(...b.slice(0, 3)) === "ID3" || (b.length > 1 && b[0] === 0xff && [0xfb, 0xf3, 0xf2, 0xfa].includes(b[1]))) return "audio/mpeg";
+    return null;
+  }
+  function media(item, field = "attachments") {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !(item.kind in MEDIA) || item.kind === "voice_max_seconds") throw new E(400, "Attach a photo or a voice note.", field);
+    const kind = item.kind, rule = MEDIA[kind];
+    let raw = String(item.data || "");
+    if (raw.startsWith("data:")) raw = raw.slice(raw.indexOf(",") + 1 || raw.length);
+    raw = raw.replace(/\s/g, "");
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || raw.length % 4) throw new E(400, "That file didn't upload properly. Try again.", field);
+    const pad = raw.endsWith("==") ? 2 : raw.endsWith("=") ? 1 : 0, size = (raw.length / 4) * 3 - pad;
+    if (!size) throw new E(400, "That file is empty.", field);
+    if (size > rule.max_bytes) throw new E(413, `Each ${kind === "photo" ? "photo" : "voice note"} must be under ${rule.max_bytes / 1e6} MB.`, field);
+    const head = Uint8Array.from(atob(raw.slice(0, 24)), (c) => c.charCodeAt(0));
+    const mime = sniff(head);
+    if (!rule.mimes.includes(mime)) throw new E(415, kind === "photo" ? "Use a JPEG, PNG or WebP photo." : "Use a recording in MP3, M4A, WebM, Ogg or WAV.", field);
+    return { kind, mime, size, data: raw };
+  }
+  function mediaList(items, existing = {}) {
+    if (items === undefined || items === null) return [];
+    if (!Array.isArray(items)) throw new E(400, "Attach a photo or a voice note.", "attachments");
+    const out = items.map((i) => media(i)), counts = { ...existing };
+    for (const m of out) {
+      counts[m.kind] = (counts[m.kind] || 0) + 1;
+      if (counts[m.kind] > MEDIA[m.kind].max_count) throw new E(400, `A report can have up to ${MEDIA[m.kind].max_count} ${m.kind === "photo" ? "photos" : "voice notes"}.`, "attachments");
+    }
+    return out;
+  }
+  const attsOf = (iid) => db.attachments.filter((a) => a.incident_id === iid).sort((a, b) => a.id - b.id);
+  function addAttachment(iid, m, uid, at) { db.attachments.push({ id: nextId("attachments"), incident_id: iid, kind: m.kind, mime: m.mime, size: m.size, data: m.data, user_id: uid, created_at: at }); }
   const cell = (v) => (typeof v === "string" && /^[=+\-@\t\r]/.test(v) ? "'" + v : v);
   const csvField = (v) => { const s = v === null || v === undefined ? "" : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const pyNum = (v) => (Number.isInteger(v) ? v.toFixed(1) : String(v)); // Python prints floats as 1.0
@@ -111,9 +153,11 @@ function createFallbackEngine(SEED, opts = {}) {
     const out = {};
     for (const k of ["id", "type", "severity", "status", "herd_size", "casualties", "crop_acres", "property_inr", "heading", "village", "lat", "lng", "place", "description", "created_at", "updated_at"]) out[k] = r[k];
     Object.assign(out, { ref: ref(r.id, r.created_at), type_label: TYPES[r.type].label, severity_label: SEVL[r.severity], status_label: STL[r.status], open: OPEN.includes(r.status), sample: !!r.sample, mine });
+    out.attachments = attsOf(r.id).map((a) => ({ id: a.id, kind: a.kind, mime: a.mime, size: a.size, created_at: a.created_at }));
     if (staff || mine) { const u = userById(r.reporter_id); out.reporter = u ? { name: u.name, phone: u.phone } : null; }
     if (events) {
       out.events = events.map((e) => { const u = userById(e.user_id); return { status: e.status, status_label: STL[e.status], note: e.note, at: e.at, by: u && (staff || STAFF.includes(u.role)) ? u.name : null, by_role: u ? u.role : null }; });
+      out.can_attach = !!(staff || mine);
       out.next = M.transitions[r.status].filter((s) => viewer && M.transition_roles[s].includes(viewer.role));
     }
     return out;
@@ -211,10 +255,27 @@ function createFallbackEngine(SEED, opts = {}) {
         crop_acres: round(num(b, "crop_acres", "float", ...LIM.crop_acres), 2), property_inr: num(b, "property_inr", "int", ...LIM.property_inr),
         heading, village: v, lat, lng, place: text(b, "place", 120), description: text(b, "description", LIM.description),
       };
+      const files = mediaList(b.attachments);
       const at = clock(), id = nextId("incidents");
       db.incidents.push({ id, ...rec, status: "reported", reporter_id: u.id, sample: 0, created_at: at, updated_at: at });
       db.events.push({ id: nextId("events"), incident_id: id, status: "reported", note: "", user_id: u.id, at });
+      for (const m of files) addAttachment(id, m, u.id, at);
       return incView(getIncident(id), u, eventsOf(id));
+    }],
+    ["POST", /^\/api\/incidents\/(\d+)\/attachments$/, "user", (u, b, q, id) => {
+      const r = getIncident(id);
+      if (!STAFF.includes(u.role) && r.reporter_id !== u.id) throw new E(403, "Only the reporter or forest staff can add to this case.");
+      const have = {};
+      for (const a of attsOf(r.id)) have[a.kind] = (have[a.kind] || 0) + 1;
+      const m = mediaList([b], have)[0], now = clock();
+      addAttachment(r.id, m, u.id, now);
+      addEvent(r.id, r.status, m.kind === "photo" ? "Added a photo" : "Added a voice note", u.id, now, null);
+      return incView(r, u, eventsOf(r.id));
+    }],
+    ["GET", /^\/api\/attachments\/(\d+)$/, "user", (u, b, q, id) => {
+      const a = db.attachments.find((x) => x.id === +id);
+      if (!a) throw new E(404, "That file is no longer available.");
+      return { id: a.id, kind: a.kind, mime: a.mime, size: a.size, data: a.data };
     }],
     ["PATCH", /^\/api\/incidents\/(\d+)$/, "staff", (u, b, q, id) => {
       const r = getIncident(id), status = b.status || null, note = text(b, "note", LIM.description);
@@ -280,10 +341,10 @@ function createFallbackEngine(SEED, opts = {}) {
     }],
     ["GET", /^\/api\/export\.csv$/, "officer", (u, b, q) => {
       const [, rows] = windowRows(q), resp = firstTimes("responded");
-      const lines = [["report_no", "reported_ist", "type", "severity", "status", "village", "lat", "lng", "herd_size", "casualties", "crop_acres", "property_inr", "heading", "place", "response_hours"]];
+      const lines = [["report_no", "reported_ist", "type", "severity", "status", "village", "lat", "lng", "herd_size", "casualties", "crop_acres", "property_inr", "heading", "place", "response_hours", "photos", "voice_notes"]];
       for (const r of [...rows].reverse()) {
         const rh = r.id in resp ? pyNum(round((resp[r.id] - r.created_at) / HOUR, 1)) : "";
-        lines.push([ref(r.id, r.created_at), istStamp(r.created_at), r.type, r.severity, r.status, r.village, pyNum(r.lat), pyNum(r.lng), r.herd_size, r.casualties, pyNum(r.crop_acres), r.property_inr, r.heading, cell(r.place), rh]);
+        lines.push([ref(r.id, r.created_at), istStamp(r.created_at), r.type, r.severity, r.status, r.village, pyNum(r.lat), pyNum(r.lng), r.herd_size, r.casualties, pyNum(r.crop_acres), r.property_inr, r.heading, cell(r.place), rh, attsOf(r.id).filter((a) => a.kind === "photo").length, attsOf(r.id).filter((a) => a.kind === "voice").length]);
       }
       return { csv: lines.map((l) => l.map(csvField).join(",")).join("\n") + "\n" };
     }],
@@ -292,6 +353,7 @@ function createFallbackEngine(SEED, opts = {}) {
       db.alerts = db.alerts.filter((a) => !a.sample).map((a) => (gone.has(a.incident_id) ? { ...a, incident_id: null } : a));
       db.incidents = db.incidents.filter((r) => !r.sample);
       db.events = db.events.filter((e) => !gone.has(e.incident_id));
+      db.attachments = db.attachments.filter((a) => !gone.has(a.incident_id));
       return { ok: true };
     }],
   ];

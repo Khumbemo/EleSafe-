@@ -8,6 +8,30 @@ const createFallbackEngine = new Function(fs.readFileSync(path.join(__dirname, "
 
 const H = 3600000;
 const login = (role, phone, pin) => ({ method: "POST", path: "/api/auth/login", body: { phone, pin }, login: role });
+const b64 = (bytes) => Buffer.from(bytes).toString("base64");
+const JPEG = b64([0xff, 0xd8, 0xff, 0xe0, ...Array(60).fill(7)]);
+const PNG = b64([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array(30).fill(1)]);
+const WEBM = b64([0x1a, 0x45, 0xdf, 0xa3, ...Array(61).fill(2)]);
+const M4A = b64([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, ...Array(20).fill(3)]);
+const HTML = b64([..."<html><script>alert(1)</script>"].map((c) => c.charCodeAt(0)));
+const media = [
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "photo", data: "data:image/jpeg;base64," + JPEG }, { kind: "photo", data: PNG }, { kind: "voice", data: WEBM }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "photo", data: HTML }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "voice", data: JPEG }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "photo", data: "abc" }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "photo", data: "" }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "video", data: JPEG }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: "nope" } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "voice", data: WEBM }, { kind: "voice", data: M4A }, { kind: "voice", data: WEBM }] } },
+  { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Sanis", attachments: [{ kind: "photo", data: b64([0xff, 0xd8, 0xff, ...Array(1_500_000).fill(0)]) }] } },
+  { as: "g", method: "GET", path: "/api/attachments/1" },
+  { as: "g", method: "GET", path: "/api/attachments/99" },
+  { as: "n", method: "POST", path: "/api/incidents/1/attachments", body: { kind: "photo", data: JPEG } },
+  { as: "v", method: "POST", path: "/api/incidents/1/attachments", body: { kind: "voice", data: M4A }, advance: 60000 },
+  { as: "v", method: "POST", path: "/api/incidents/1/attachments", body: { kind: "voice", data: M4A } },
+  { as: "g", method: "GET", path: "/api/incidents/1" },
+  { as: "o", method: "GET", path: "/api/export.csv?days=2" },
+];
 const S = [
   { method: "GET", path: "/api/meta" },
   { method: "POST", path: "/api/severity", body: { type: "crop_raid", herd_size: 5 } },
@@ -52,6 +76,7 @@ const S = [
   { method: "POST", path: "/api/auth/register", body: { name: "Akum Jamir", phone: "9876543210", village: "Englan", pin: "2468" }, login: "n" },
   { method: "POST", path: "/api/auth/register", body: { name: "Akum Jamir", phone: "9876543210", village: "Englan", pin: "2468" } },
   { as: "n", method: "GET", path: "/api/overview", advance: 25 * H },
+  ...media,
   { as: "o", method: "DELETE", path: "/api/sample" },
   { as: "o", method: "GET", path: "/api/stats?days=90" },
   { as: "v", method: "GET", path: "/api/incidents?mine=1&status=all" },

@@ -1,3 +1,4 @@
+import base64
 import csv
 import io
 import json
@@ -206,6 +207,61 @@ class IncidentTests(unittest.TestCase):
         self.assertTrue(all(i["mine"] for i in mine))
         self.assertEqual(self.vil.call("GET", "/api/incidents?status=closed")[0], 403)
         self.assertEqual(self.guard.call("GET", "/api/incidents?status=closed")[0], 200)
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 60
+WEBM = b"\x1a\x45\xdf\xa3" + b"\x00" * 60
+b64 = lambda raw: base64.b64encode(raw).decode()
+
+
+class MediaTests(unittest.TestCase):
+    def setUp(self):
+        self.app, self.clock = make_app()
+        self.vil, self.guard = as_role(self.app, "villager"), as_role(self.app, "guard")
+
+    def report(self, attachments):
+        return self.vil.call("POST", "/api/incidents", {"type": "sighting", "village": "Sanis", "attachments": attachments})
+
+    def test_report_with_photo_and_voice(self):
+        s, inc = self.report([{"kind": "photo", "data": "data:image/jpeg;base64," + b64(JPEG)}, {"kind": "voice", "data": b64(WEBM)}])
+        self.assertEqual(s, 200)
+        self.assertEqual([(a["kind"], a["mime"], a["size"]) for a in inc["attachments"]],
+                         [("photo", "image/jpeg", 64), ("voice", "audio/webm", 64)])
+        s, a = self.guard.call("GET", f"/api/attachments/{inc['attachments'][0]['id']}")
+        self.assertEqual(base64.b64decode(a["data"]), JPEG)
+
+    def test_type_comes_from_content_not_label(self):
+        html = b"<html><script>alert(1)</script></html>"
+        s, d = self.report([{"kind": "photo", "data": "data:image/jpeg;base64," + b64(html)}])
+        self.assertEqual((s, d["field"]), (415, "attachments"))
+        self.assertEqual(self.report([{"kind": "voice", "data": b64(JPEG)}])[0], 415)
+        self.assertEqual(self.report([{"kind": "photo", "data": "not base64!"}])[0], 400)
+        self.assertEqual(self.report([{"kind": "video", "data": b64(JPEG)}])[0], 400)
+
+    def test_size_and_count_limits(self):
+        big = JPEG + b"\x00" * 1_500_000
+        self.assertEqual(self.report([{"kind": "photo", "data": b64(big)}])[0], 413)
+        s, d = self.report([{"kind": "voice", "data": b64(WEBM)}] * 3)
+        self.assertEqual((s, d["error"]), (400, "A report can have up to 2 voice notes."))
+        self.assertEqual(self.app.store.one("SELECT COUNT(*) AS n FROM incidents")["n"], 13)  # nothing saved
+
+    def test_add_later_and_permissions(self):
+        iid = self.report([])[1]["id"]
+        other = Client(self.app)
+        other.call("POST", "/api/auth/register", {"name": "Other", "phone": "9123456789", "village": "Sanis", "pin": "1234"})
+        other.login("9123456789", "1234")
+        self.assertEqual(other.call("POST", f"/api/incidents/{iid}/attachments", {"kind": "photo", "data": b64(JPEG)})[0], 403)
+        s, inc = self.guard.call("POST", f"/api/incidents/{iid}/attachments", {"kind": "photo", "data": b64(JPEG)})
+        self.assertEqual((s, len(inc["attachments"])), (200, 1))
+        self.assertEqual(inc["events"][-1]["note"], "Added a photo")
+        self.assertFalse(other.call("GET", f"/api/incidents/{iid}")[1]["can_attach"])
+
+    def test_csv_counts_media(self):
+        self.report([{"kind": "photo", "data": b64(JPEG)}, {"kind": "photo", "data": b64(JPEG)}])
+        off = as_role(self.app, "officer")
+        rows = list(csv.reader(io.StringIO(off.call("GET", "/api/export.csv")[1])))
+        self.assertEqual(rows[0][-2:], ["photos", "voice_notes"])
+        self.assertEqual(rows[-1][-2:], ["2", "0"])
 
 
 class AlertTests(unittest.TestCase):

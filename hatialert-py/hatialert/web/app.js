@@ -94,8 +94,15 @@
     more: '<path d="M4 7h16M4 12h16M4 17h16"/>',
     copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
     pin: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+    camera: '<path d="M3 8.5A2.5 2.5 0 0 1 5.5 6H7l2-2.5h6L17 6h1.5A2.5 2.5 0 0 1 21 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/><circle cx="12" cy="12.5" r="3.8"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>',
+    stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',
+    x: '<path d="M6 6l12 12M18 6 6 18"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>',
+    flip: '<path d="M4.5 10A8 8 0 0 1 18 6.5L20 8.5M19.5 14A8 8 0 0 1 6 17.5L4 15.5"/><path d="M20 4.5v4h-4M4 19.5v-4h4"/>',
   };
-  const icon = (n) => `<span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24">${ICON[n]}</svg></span>`;
+  const ICON_SVG = (n) => `<svg viewBox="0 0 24 24">${ICON[n]}</svg>`;
+  const icon = (n) => `<span class="ic" aria-hidden="true">${ICON_SVG(n)}</span>`;
   const MARK = `<svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><rect class="mk-bg" width="30" height="30" rx="8"/><circle class="mk-dot" cx="15" cy="15" r="3.2"/><circle class="mk-ring" cx="15" cy="15" r="7.5" stroke-width="1.8" stroke-dasharray="3 2.6"/><circle class="mk-ring faint" cx="15" cy="15" r="11.5" stroke-width="1.4"/></svg>`;
 
   // -- shell -------------------------------------------------------------
@@ -276,7 +283,7 @@
         <h1>${o.nearby.length ? `${plural(o.nearby.length, "open incident")} near you` : "No open incidents near you"}</h1></div>
       ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `<b>${i.km} km ${esc(i.dir)}</b> of ${esc(o.village.name)}`)).join("")}</section>`
         : `<p class="muted">${o.open_total ? `${plural(o.open_total, "open incident")} elsewhere in the district.` : "All quiet across the district."} You'll see new reports here.</p>`}
-      <a class="btn primary big" href="#/report">${icon("report")} Report elephants</a>
+      <div class="grid2"><a class="btn primary big" href="#/report">${icon("report")} Report elephants</a><a class="btn big" href="#/report/camera">${icon("camera")} Snap a photo and report</a></div>
       <section class="card flush">${mapSvg({ incidents: open, home: o.village.name, radius: o.radius_km })}${legend(o.radius_km)}</section>
       ${isStaff() ? `<div class="kpis"><div class="kpi"><small>Open in district</small><b>${o.open_total}</b></div><div class="kpi"><small>Waiting for a check</small><b>${o.awaiting_check}</b></div><div class="kpi"><small>Reported in 24 h</small><b>${o.reported_24h}</b></div></div>` : ""}
       ${o.has_sample && state.user.role === "officer" ? `<div class="notice"><span>Sample incidents are loaded so you can try the app.</span><span class="confirm" id="sample"><button class="btn small" data-ask>Remove sample data</button></span></div>` : ""}`;
@@ -290,16 +297,215 @@
     }
   }
 
+  // -- photos and voice notes --------------------------------------------
+  // Live camera and microphone where the browser allows them; otherwise the
+  // phone's own camera or recorder through a file input (capture=...).
+  const live = { camera: !!navigator.mediaDevices?.getUserMedia, mic: !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder) };
+  const dataUrl = (mime, b64) => `data:${mime};base64,${b64}`;
+  const kb = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1000)) + " KB");
+  const blobToB64 = (blob) => new Promise((ok, fail) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(",")[1] || "");
+    r.onerror = () => fail(r.error);
+    r.readAsDataURL(blob);
+  });
+
+  function pickFile(accept, capture) {
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = accept;
+      if (capture) input.setAttribute("capture", capture);
+      input.hidden = true;
+      input.onchange = () => { resolve(input.files[0] || null); input.remove(); };
+      input.addEventListener("cancel", () => { resolve(null); input.remove(); });
+      document.body.append(input);
+      input.click();
+    });
+  }
+
+  // Shrink to at most 1600 px on the long side and re-encode as JPEG, so a
+  // phone photo uploads as a few hundred KB on a weak connection.
+  async function photoFromSource(source) {
+    let img = source;
+    if (source instanceof Blob) {
+      try { img = await createImageBitmap(source); }
+      catch {
+        img = await new Promise((ok, fail) => {
+          const el = new Image();
+          el.onload = () => ok(el);
+          el.onerror = () => fail(new ApiErr(415, "That photo couldn't be opened. Try a JPEG or PNG.", "attachments"));
+          el.src = URL.createObjectURL(source);
+        });
+      }
+    }
+    const w = img.videoWidth || img.naturalWidth || img.width, h = img.videoHeight || img.naturalHeight || img.height;
+    if (!w || !h) throw new ApiErr(415, "That photo couldn't be opened. Try a JPEG or PNG.", "attachments");
+    const k = Math.min(1, 1600 / Math.max(w, h));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * k); canvas.height = Math.round(h * k);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((ok) => canvas.toBlob(ok, "image/jpeg", 0.82));
+    if (!blob) throw new ApiErr(415, "That photo couldn't be opened. Try a JPEG or PNG.", "attachments");
+    const data = await blobToB64(blob);
+    return { kind: "photo", mime: "image/jpeg", size: blob.size, data, url: dataUrl("image/jpeg", data) };
+  }
+
+  async function voiceFromBlob(blob) {
+    const rule = state.meta.media.voice;
+    if (blob.size > rule.max_bytes) throw new ApiErr(413, `Each voice note must be under ${rule.max_bytes / 1e6} MB.`, "attachments");
+    const mime = (blob.type || "audio/webm").split(";")[0];
+    const data = await blobToB64(blob);
+    return { kind: "voice", mime, size: blob.size, data, url: dataUrl(mime, data) };
+  }
+
+  // Full-screen live camera. Resolves a photo item, or null when closed.
+  // Rejects when the camera can't be opened, so the caller can fall back.
+  async function liveCamera() {
+    let facing = "environment", stream;
+    const open = async () => {
+      stream?.getTracks().forEach((t) => t.stop());
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false });
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+    };
+    const box = document.createElement("div");
+    box.className = "cam";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-label", "Camera");
+    box.innerHTML = `<video playsinline muted autoplay></video><img alt="Photo you just took" hidden>
+      <div class="cam-bar">
+        <button type="button" class="cam-btn" data-close aria-label="Close camera">${icon("x")}</button>
+        <button type="button" class="shutter" data-shoot aria-label="Take photo"></button>
+        <button type="button" class="cam-btn" data-flip aria-label="Switch camera">${icon("flip")}</button>
+      </div>
+      <div class="cam-bar" hidden data-review>
+        <button type="button" class="btn" data-retake>Retake</button>
+        <button type="button" class="btn primary" data-use>Use photo</button>
+      </div>`;
+    const video = $("video", box), still = $("img", box);
+    document.body.append(box);
+    try { await open(); }
+    catch (e) { box.remove(); throw e; }
+    $("[data-shoot]", box).focus();
+    return new Promise((resolve) => {
+      let shot = null;
+      const done = (val) => { stream?.getTracks().forEach((t) => t.stop()); box.remove(); document.removeEventListener("keydown", onKey); resolve(val); };
+      const onKey = (e) => { if (e.key === "Escape") done(null); };
+      document.addEventListener("keydown", onKey);
+      const review = (on) => { video.hidden = on; still.hidden = !on; $$(".cam-bar", box)[0].hidden = on; $("[data-review]", box).hidden = !on; };
+      box.onclick = async (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        if (b.matches("[data-close]")) done(null);
+        else if (b.matches("[data-flip]")) { facing = facing === "environment" ? "user" : "environment"; open().catch(() => toast("Couldn't switch camera")); }
+        else if (b.matches("[data-shoot]")) { shot = await photoFromSource(video); still.src = shot.url; review(true); $("[data-use]", box).focus(); }
+        else if (b.matches("[data-retake]")) { shot = null; review(false); }
+        else if (b.matches("[data-use]")) done(shot);
+      };
+    });
+  }
+
+  async function takePhoto({ gallery = false } = {}) {
+    if (!gallery && live.camera) {
+      try { return await liveCamera(); }
+      catch { live.camera = false; } // blocked here: use the phone's camera app from now on
+    }
+    const file = await pickFile("image/*", gallery ? null : "environment");
+    return file ? photoFromSource(file) : null;
+  }
+
+  // Inline voice recorder. `onDone(item)` gets the finished note.
+  function voiceRecorder(host, onDone) {
+    const max = state.meta.media.voice_max_seconds;
+    let rec = null, timer = null, started = 0;
+    const idle = () => {
+      clearInterval(timer);
+      host.innerHTML = `<button type="button" class="btn" data-rec>${icon("mic")} Record voice note</button>`;
+    };
+    const fail = (msg) => { idle(); toast(msg); };
+    async function start() {
+      if (!live.mic) return fallback();
+      let stream;
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+      catch { live.mic = false; return fallback(); }
+      const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find((t) => MediaRecorder.isTypeSupported?.(t));
+      const chunks = [];
+      rec = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : undefined);
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        clearInterval(timer);
+        try { onDone(await voiceFromBlob(new Blob(chunks, { type: rec.mimeType || type || "audio/webm" }))); idle(); }
+        catch (err) { fail(err.message); }
+      };
+      rec.start(250);
+      started = Date.now();
+      host.innerHTML = `<div class="recording" role="status"><span class="rec-dot" aria-hidden="true"></span><b class="tnum" data-time>0:00</b><span class="small muted">of ${max / 60}:00</span><button type="button" class="btn primary" data-stop>${icon("stop")} Stop and keep</button></div>`;
+      $("[data-stop]", host).focus();
+      timer = setInterval(() => {
+        const s = Math.floor((Date.now() - started) / 1000);
+        const t = $("[data-time]", host);
+        if (t) t.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+        if (s >= max) rec.state === "recording" && rec.stop();
+      }, 250);
+    }
+    async function fallback() {
+      const file = await pickFile("audio/*", "user");
+      if (!file) return;
+      try { onDone(await voiceFromBlob(file)); } catch (err) { fail(err.message); }
+    }
+    host.addEventListener("click", (e) => {
+      if (e.target.closest("[data-rec]")) start();
+      else if (e.target.closest("[data-stop]") && rec?.state === "recording") rec.stop();
+    });
+    idle();
+    return { stop: () => rec?.state === "recording" && rec.stop() };
+  }
+
+  // Photos first, then voice notes; k stays the item's index in `items`.
+  const mediaTiles = (items, removable) => items.map((m, k) => [m, k]).sort((a, b) => (a[0].kind === "photo" ? 0 : 1) - (b[0].kind === "photo" ? 0 : 1)).map(([m, k]) => m.kind === "photo"
+    ? `<figure class="thumb"><button type="button" class="thumb-open" data-view="${k}" aria-label="View photo ${k + 1}"><img alt="" ${m.url ? `src="${esc(m.url)}"` : ""} data-att="${m.id ?? ""}"></button>${removable ? `<button type="button" class="thumb-x" data-remove="${k}" aria-label="Remove photo">${icon("x")}</button>` : ""}</figure>`
+    : `<div class="voice"><span class="ic" aria-hidden="true">${ICON_SVG("mic")}</span><audio controls preload="metadata" ${m.url ? `src="${esc(m.url)}"` : ""} data-att="${m.id ?? ""}" aria-label="Voice note ${k + 1}"></audio><span class="small muted tnum">${kb(m.size)}</span>${removable ? `<button type="button" class="btn small" data-remove="${k}">Remove</button>` : ""}</div>`).join("");
+
+  function lightbox(src) {
+    const box = document.createElement("div");
+    box.className = "lightbox";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Photo");
+    box.innerHTML = `<img alt="Report photo" src="${esc(src)}"><button type="button" class="cam-btn" aria-label="Close">${icon("x")}</button>`;
+    const close = () => { box.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => e.key === "Escape" && close();
+    box.onclick = close;
+    document.addEventListener("keydown", onKey);
+    document.body.append(box);
+    $("button", box).focus();
+  }
+
+  // Load stored attachments into <img>/<audio> elements marked data-att.
+  function hydrateMedia(root) {
+    $$("[data-att]", root).forEach(async (el) => {
+      if (!el.dataset.att || el.getAttribute("src")) return;
+      try { const a = await api("GET", `/api/attachments/${el.dataset.att}`); el.src = dataUrl(a.mime, a.data); }
+      catch { el.replaceWith(Object.assign(document.createElement("span"), { className: "small muted", textContent: "File unavailable" })); }
+    });
+  }
+
   // -- report ------------------------------------------------------------
   const DAMAGE_TYPES = ["crop_raid", "property_damage", "injury", "death"];
-  async function viewReport() {
+  async function viewReport(mode) {
     const m = state.meta;
-    const f = { type: "", herd_size: 1, village: state.user.village, offset_km: 0, offset_dir: "", heading: "", casualties: 0, crop_acres: "", property_inr: "", place: "", description: "", lat: null, lng: null };
+    const f = { media: [], type: mode === "camera" ? "sighting" : "", herd_size: 1, village: state.user.village, offset_km: 0, offset_dir: "", heading: "", casualties: 0, crop_acres: "", property_inr: "", place: "", description: "", lat: null, lng: null };
     const main = shell("report", `
       <div class="pagehead"><h1>Report elephants</h1><p class="muted">Only "what happened" is required. Send it now and add detail if you can.</p></div>
       <form id="rep" class="stack" novalidate>
         <section class="card" data-field="type"><h2>What's happening?</h2>
           <div class="types">${m.types.map((t) => `<button type="button" class="type" data-type="${t.key}" aria-pressed="false"><b>${esc(t.label)}</b><small>${esc(t.local)}</small></button>`).join("")}</div></section>
+        <section class="card" data-field="attachments"><h2>Photo and voice note</h2>
+          <p class="small muted">Optional. Take photos only from a safe distance. Never go closer to a herd for a picture.</p>
+          <div class="row"><button type="button" class="btn" id="rep-cam">${icon("camera")} Take photo</button><button type="button" class="btn" id="rep-gallery">${icon("image")} From gallery</button><span id="rep-voice"></span></div>
+          <div class="thumbs" id="rep-media"></div></section>
         <section class="card" data-field="herd_size"><h2>How many elephants?</h2>
           <div class="row"><div class="stepper"><button type="button" data-step="-1" aria-label="One fewer">−</button><input id="rep-herd" type="number" min="0" max="200" value="1" aria-label="Number of elephants"><button type="button" data-step="1" aria-label="One more">+</button></div>
           <div class="chips">${[1, 3, 5, 10, 20].map((n) => `<button type="button" class="chip" data-herd="${n}">${n}${n === 20 ? "+" : ""}</button>`).join("")}</div></div>
@@ -352,6 +558,27 @@
       sync();
     });
     form.addEventListener("input", sync);
+    const rule = m.media;
+    const count = (kind) => f.media.filter((x) => x.kind === kind).length;
+    const renderMedia = () => {
+      $("#rep-media").innerHTML = mediaTiles(f.media, true);
+      const full = count("photo") >= rule.photo.max_count;
+      $("#rep-cam").disabled = full; $("#rep-gallery").disabled = full;
+      $("#rep-voice").hidden = count("voice") >= rule.voice.max_count;
+    };
+    const addPhoto = async (opts) => {
+      try { const p = await takePhoto(opts); if (p) { f.media.push(p); renderMedia(); toast("Photo added"); } }
+      catch (err) { showErrors(form, err); }
+    };
+    $("#rep-cam").onclick = () => addPhoto();
+    $("#rep-gallery").onclick = () => addPhoto({ gallery: true });
+    const recorder = voiceRecorder($("#rep-voice"), (v) => { f.media.push(v); renderMedia(); toast("Voice note added"); });
+    $("#rep-media").onclick = (e) => {
+      const rm = e.target.closest("[data-remove]"), view = e.target.closest("[data-view]");
+      if (rm) { f.media.splice(+rm.dataset.remove, 1); renderMedia(); }
+      else if (view) lightbox(f.media[+view.dataset.view].url);
+    };
+    window.addEventListener("hashchange", () => recorder.stop(), { once: true });
     $("#rep-gps").onclick = () => {
       const note = $("#rep-gps-note");
       if (f.lat != null) { f.lat = f.lng = null; note.textContent = ""; $("#rep-gps").lastChild.textContent = " Use my GPS location instead"; return sync(); }
@@ -375,21 +602,25 @@
       if (!+body.offset_km) body.offset_dir = "";
       if (f.lat != null) Object.assign(body, { lat: f.lat, lng: f.lng });
       if (!DAMAGE_TYPES.includes(f.type)) Object.assign(body, { casualties: 0, crop_acres: 0, property_inr: 0 });
+      if (f.media.length) body.attachments = f.media.map(({ kind, data }) => ({ kind, data }));
       $("#rep-send").disabled = true;
+      $("#rep-send").textContent = f.media.length ? "Sending…" : "Send report";
       try {
         const inc = await api("POST", "/api/incidents", body);
         main.innerHTML = `
           <section class="card">
             <span class="label">Report sent</span>
             <h1>Thank you. Your report number is <span class="mono">${esc(inc.ref)}</span></h1>
-            <div class="row">${sevPill(inc.severity, inc.severity_label + " severity")}<span class="muted">${esc(inc.type_label)} · ${esc(inc.village)}</span></div>
+            <div class="row">${sevPill(inc.severity, inc.severity_label + " severity")}<span class="muted">${esc(inc.type_label)} · ${esc(inc.village)}${inc.attachments.length ? ` · ${plural(inc.attachments.filter((a) => a.kind === "photo").length, "photo")}, ${plural(inc.attachments.filter((a) => a.kind === "voice").length, "voice note")}` : ""}</span></div>
             <p>A forest guard will check it. Keep this number for any compensation claim.</p>
             <p class="muted">Stay well away from the herd and warn your neighbours.</p>
             <div class="row"><a class="btn primary" href="#/case/${inc.id}">View report</a><a class="btn" href="#/home">Back to home</a></div>
           </section>`;
-      } catch (err) { showErrors(form, err); $("#rep-send").disabled = false; }
+      } catch (err) { showErrors(form, err); $("#rep-send").disabled = false; $("#rep-send").textContent = "Send report"; }
     };
     sync();
+    renderMedia();
+    if (mode === "camera") addPhoto();
   }
 
   // -- cases -------------------------------------------------------------
@@ -435,14 +666,37 @@
       <section class="card flush">${mapSvg({ incidents: [i], home: state.user.village, focus: i.id })}</section>
       <section class="card"><dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
         ${i.description ? `<p>${esc(i.description)}</p>` : ""}</section>
+      ${i.attachments.length || i.can_attach ? `<section class="card" id="case-media"><h2>Photos and voice notes</h2>
+        ${i.attachments.length ? `<div class="thumbs">${mediaTiles(i.attachments, false)}</div>` : '<p class="small muted">None yet.</p>'}
+        ${i.can_attach ? `<div class="row"><button type="button" class="btn small" id="case-cam">${icon("camera")} Add photo</button><span id="case-voice"></span></div>` : ""}</section>` : ""}
       <section class="card"><h2>What has happened</h2>
-        <ol class="timeline">${i.events.map((e) => `<li><span class="dot"></span><div><b>${esc(e.status_label)}</b> <span class="small muted">${when(e.at)}${e.by ? ` · ${esc(e.by)}` : ""}</span>${e.note ? `<p>${esc(e.note)}</p>` : ""}</div></li>`).join("")}</ol></section>
+        <ol class="timeline">${i.events.map((e, k) => `<li><span class="dot"></span><div><b>${k && e.status === i.events[k - 1].status ? "Update" : esc(e.status_label)}</b> <span class="small muted">${when(e.at)}${e.by ? ` · ${esc(e.by)}` : ""}</span>${e.note ? `<p>${esc(e.note)}</p>` : ""}</div></li>`).join("")}</ol></section>
       ${staff ? `<form class="card" id="act" novalidate><h2>Staff action</h2>
         <label class="field" data-field="note"><span>Note <small>(team sent, damage seen, advice given)</small></span><textarea id="act-note" maxlength="500"></textarea></label>
         <div data-errors></div>
         <div class="row">${i.next.map((s) => `<button type="button" class="btn ${s === "false_report" ? "" : "primary"}" data-status="${s}">${verbs[s]}</button>`).join("")}<button type="button" class="btn" data-status="">Add note only</button></div>
         ${i.open ? `<div class="row between split"><span class="small muted">Tell villages within 5 km.</span><button type="button" class="btn" id="warn">Warn nearby villages</button></div>` : ""}
       </form>` : ""}`;
+    const mediaBox = $("#case-media", main);
+    if (mediaBox) {
+      hydrateMedia(mediaBox);
+      mediaBox.addEventListener("click", (e) => {
+        const view = e.target.closest("[data-view]");
+        const img = view && $("img", view);
+        if (img?.src) lightbox(img.src);
+      });
+      const upload = async (item) => {
+        if (!item) return;
+        try { await api("POST", `/api/incidents/${i.id}/attachments`, { kind: item.kind, data: item.data }); toast(item.kind === "photo" ? "Photo added" : "Voice note added"); viewCase(i.id); }
+        catch (err) { toast(err.message); }
+      };
+      const cam = $("#case-cam", main);
+      if (cam) {
+        cam.onclick = async () => { try { upload(await takePhoto()); } catch (err) { toast(err.message); } };
+        const rec = voiceRecorder($("#case-voice", main), upload);
+        window.addEventListener("hashchange", () => rec.stop(), { once: true });
+      }
+    }
     const form = $("#act", main);
     if (!form) return;
     $$("[data-status]", form).forEach((b) => (b.onclick = async () => {
@@ -638,7 +892,7 @@
     }
     window.scrollTo(0, 0);
     switch (page) {
-      case "report": return viewReport();
+      case "report": return viewReport(arg);
       case "cases": return viewCases();
       case "case": return viewCase(arg);
       case "alerts": return viewAlerts();

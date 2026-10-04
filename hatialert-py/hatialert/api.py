@@ -7,6 +7,8 @@ bridge both call it, so the same code answers every request.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import io
 import json
@@ -78,6 +80,46 @@ def _cell(value):
     if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + value
     return value
+
+
+def _media(item, field="attachments"):
+    """Validate one {kind, data} upload (data is base64, data: URL prefix allowed)."""
+    if not isinstance(item, dict) or item.get("kind") not in domain.MEDIA:
+        raise ApiError(400, "Attach a photo or a voice note.", field)
+    kind, rule = item["kind"], domain.MEDIA[item["kind"]]
+    raw = str(item.get("data") or "")
+    if raw.startswith("data:"):
+        raw = raw.partition(",")[2]
+    raw = re.sub(r"\s", "", raw)
+    try:
+        blob = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError(400, "That file didn't upload properly. Try again.", field)
+    if not blob:
+        raise ApiError(400, "That file is empty.", field)
+    if len(blob) > rule["max_bytes"]:
+        limit = rule["max_bytes"] / 1_000_000
+        raise ApiError(413, f"Each {'photo' if kind == 'photo' else 'voice note'} must be under {limit:g} MB.", field)
+    mime = domain.sniff_media(blob[:16])
+    if mime not in rule["mimes"]:
+        raise ApiError(415, "Use a JPEG, PNG or WebP photo." if kind == "photo"
+                       else "Use a recording in MP3, M4A, WebM, Ogg or WAV.", field)
+    return kind, mime, blob
+
+
+def _media_list(items, existing=None):
+    if items is None:
+        return []
+    if not isinstance(items, list):
+        raise ApiError(400, "Attach a photo or a voice note.", "attachments")
+    out = [_media(i) for i in items]
+    counts = dict(existing or {})
+    for kind, _, _ in out:
+        counts[kind] = counts.get(kind, 0) + 1
+        if counts[kind] > domain.MEDIA[kind]["max_count"]:
+            n = domain.MEDIA[kind]["max_count"]
+            raise ApiError(400, f"A report can have up to {n} {'photos' if kind == 'photo' else 'voice notes'}.", "attachments")
+    return out
 
 
 def normalize_phone(raw) -> str:
@@ -178,6 +220,10 @@ class App:
             sample=bool(row["sample"]),
             mine=mine,
         )
+        out["attachments"] = [
+            {"id": a["id"], "kind": a["kind"], "mime": a["mime"], "size": a["size"], "created_at": a["created_at"]}
+            for a in self.store.attachments(row["id"])
+        ]
         if staff or mine:
             reporter = self.store.user(row["reporter_id"]) if row["reporter_id"] else None
             out["reporter"] = {"name": reporter["name"], "phone": reporter["phone"]} if reporter else None
@@ -191,6 +237,7 @@ class App:
                 }
                 for e in events
             ]
+            out["can_attach"] = bool(staff or mine)
             out["next"] = [
                 s for s in domain.TRANSITIONS[row["status"]]
                 if viewer and viewer["role"] in domain.TRANSITION_ROLES[s]
@@ -342,8 +389,31 @@ class App:
             "place": _text(data, "place", 120),
             "description": _text(data, "description", domain.LIMITS["description"]),
         }
-        iid = self.store.add_incident(record, user["id"], self.clock())
+        media = _media_list(data.get("attachments"))
+        iid = self.store.add_incident(record, user["id"], self.clock(), media=media)
         return self.get_incident(user, {}, {}, iid)
+
+    @route("POST", r"/api/incidents/(\d+)/attachments")
+    def post_attachment(self, user, data, q, iid):
+        row = self._incident(iid)
+        if user["role"] not in domain.STAFF and row["reporter_id"] != user["id"]:
+            raise ApiError(403, "Only the reporter or forest staff can add to this case.")
+        have = {}
+        for a in self.store.attachments(row["id"]):
+            have[a["kind"]] = have.get(a["kind"], 0) + 1
+        kind, mime, blob = _media_list([data], have)[0]
+        now = self.clock()
+        self.store.add_attachment(row["id"], kind, mime, blob, user["id"], now)
+        self.store.add_event(row["id"], row["status"], "Added a photo" if kind == "photo" else "Added a voice note", user["id"], now)
+        return self.get_incident(user, {}, {}, iid)
+
+    @route("GET", r"/api/attachments/(\d+)")
+    def get_attachment(self, user, data, q, aid):
+        a = self.store.attachment(int(aid))
+        if not a:
+            raise ApiError(404, "That file is no longer available.")
+        return {"id": a["id"], "kind": a["kind"], "mime": a["mime"], "size": a["size"],
+                "data": base64.b64encode(a["data"]).decode()}
 
     @route("PATCH", r"/api/incidents/(\d+)", auth="staff")
     def patch_incident(self, user, data, q, iid):
@@ -473,15 +543,18 @@ class App:
     def get_export(self, user, data, q):
         days, since, rows = self._window(q)
         responded = self.store.first_event_times("responded")
+        media = self.store.media_counts()
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\n")
         w.writerow(["report_no", "reported_ist", "type", "severity", "status", "village", "lat", "lng",
-                    "herd_size", "casualties", "crop_acres", "property_inr", "heading", "place", "response_hours"])
+                    "herd_size", "casualties", "crop_acres", "property_inr", "heading", "place", "response_hours",
+                    "photos", "voice_notes"])
         for r in reversed(rows):
             rh = round((responded[r["id"]] - r["created_at"]) / domain.HOUR_MS, 1) if r["id"] in responded else ""
             w.writerow([domain.reference(r["id"], r["created_at"]), domain.ist_stamp(r["created_at"]), r["type"],
                         r["severity"], r["status"], r["village"], r["lat"], r["lng"], r["herd_size"],
-                        r["casualties"], r["crop_acres"], r["property_inr"], r["heading"], _cell(r["place"]), rh])
+                        r["casualties"], r["crop_acres"], r["property_inr"], r["heading"], _cell(r["place"]), rh,
+                        media.get(r["id"], {}).get("photo", 0), media.get(r["id"], {}).get("voice", 0)])
         return "text/csv; charset=utf-8", buf.getvalue()
 
     @route("DELETE", "/api/sample", auth="officer")

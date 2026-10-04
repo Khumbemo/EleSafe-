@@ -7,10 +7,29 @@
   const BOOT_PY = __BOOT_PY__;
   const SEED = __SEED__;
   const PYODIDE_JS = "https://cdn.jsdelivr.net/npm/pyodide@__PYODIDE_VERSION__/pyodide.js";
-  const SAVE_KEY = "hatialert.preview.db.v1";
   const say = (m) => window.HATI_BOOT_MSG && window.HATI_BOOT_MSG(m);
-  const load = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
-  const save = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked: keep going in memory */ } };
+  // The database snapshot lives in IndexedDB (photos outgrow localStorage).
+  // Any failure here just means changes last until the page is closed.
+  const idb = () => new Promise((ok, fail) => {
+    const req = indexedDB.open("hatialert-preview", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onsuccess = () => ok(req.result);
+    req.onerror = () => fail(req.error);
+  });
+  async function load() {
+    try {
+      const d = await idb();
+      return await new Promise((ok) => { const r = d.transaction("kv").objectStore("kv").get("db"); r.onsuccess = () => ok(r.result || null); r.onerror = () => ok(null); });
+    } catch { return null; }
+  }
+  let saving = Promise.resolve();
+  function save(bytes) {
+    saving = saving.then(async () => {
+      try { const d = await idb(); d.transaction("kv", "readwrite").objectStore("kv").put(bytes, "db"); }
+      catch { /* storage blocked: keep going in memory */ }
+    });
+  }
+  try { localStorage.removeItem("hatialert.preview.db.v1"); } catch { /* old text snapshot */ }
 
   const t = { engine: "starting", canDownload: false };
   let call;
@@ -42,15 +61,16 @@
     say("Loading HatiAlert…");
     py.FS.mkdirTree("/home/pyodide/hatialert");
     for (const [name, src] of Object.entries(PY_FILES)) py.FS.writeFile("/home/pyodide/hatialert/" + name, src);
-    py.globals.set("SAVED", load(SAVE_KEY) || "");
+    const saved = await load();
+    py.globals.set("SAVED", saved || undefined); // undefined arrives as None; null would be jsnull
     try { py.runPython(BOOT_PY); }
-    catch (e) { py.globals.set("SAVED", ""); py.runPython(BOOT_PY); }
+    catch (e) { console.warn("HatiAlert: saved data unreadable, starting fresh", e); py.globals.set("SAVED", undefined); py.runPython(BOOT_PY); }
     const handle = py.globals.get("handle_json"), dump = py.globals.get("dump_db");
     const version = py.runPython("import sys; sys.version.split()[0]");
     t.engine = `Python ${version} in your browser (Pyodide)`;
     return (m, path, q, body, auth) => {
       const out = JSON.parse(handle(m, path, q, body, auth));
-      if (m !== "GET" && out.status < 400) save(SAVE_KEY, dump());
+      if (m !== "GET" && out.status < 400) { const snap = dump(); save(snap.toJs()); snap.destroy(); }
       return out;
     };
   }

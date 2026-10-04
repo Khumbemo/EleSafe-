@@ -31,6 +31,14 @@ of **sample** incidents (an officer can remove them from the Home screen):
 - **Report** in under a minute: what happened, how many elephants, nearest
   village plus distance and direction (or GPS), herd heading, damage.
   Severity is worked out on the server with the original app's rules.
+- **Photos and voice notes.** "Snap a photo and report" opens the camera
+  straight away; the report form takes up to 6 photos (shrunk to 1600 px
+  JPEG on the phone) and 2 voice notes (up to 60 s). The reporter and forest
+  staff can add more to a case later. Where the browser allows it the app
+  uses a live camera and an in-app recorder; otherwise (plain-HTTP network
+  addresses, embedded pages) the buttons open the phone's own camera or
+  recorder. The server checks each file's real type from its first bytes,
+  so a file can't pretend to be a photo.
 - **Report numbers** like `HA-2610-0014` (IST year-month + id) for
   compensation claims.
 - **Case workflow**: reported → verified → team responded → resolved, or
@@ -63,15 +71,16 @@ tools/          hosted-preview build (Pyodide) and the JS-fallback parity check
 ## Tests
 
 ```sh
-python -m unittest             # 24 tests: rules, geography, auth, workflow, alerts, stats, CSV
-node tools/parity.cjs          # the preview's JS fallback answers 52 requests exactly like api.py
+python -m unittest             # 29 tests: rules, geography, auth, workflow, media, alerts, stats, CSV
+node tools/parity.cjs          # the preview's JS fallback answers 68 requests exactly like api.py
 ```
 
 ## Hosted preview
 
 `tools/build_preview.py` builds a single page that runs this same `hatialert`
 package in the browser with [Pyodide](https://pyodide.org) on an in-memory
-SQLite database (saved to the viewer's browser; the standard-library zip is embedded in the page). If a browser won't run
+SQLite database, saved to the viewer's browser (IndexedDB); the
+standard-library zip is embedded in the page. If a browser won't run
 WebAssembly, the page switches to `tools/preview/fallback.js`, a JavaScript
 copy of the API that `tools/parity.cjs` keeps in step with `api.py`. The
 More screen shows which engine is running.
@@ -88,3 +97,7 @@ More screen shows which engine is running.
   no SMS verification, and staff roles are set in the database:
   `UPDATE users SET role = 'guard' WHERE phone = '…';`
 - Run it behind HTTPS (for example a reverse proxy) when it's on a network.
+  Browsers only allow the live camera and microphone on HTTPS or localhost;
+  on plain HTTP the app falls back to the phone's camera and recorder apps.
+- Photos and voice notes are stored inside the SQLite file. Back it up, and
+  remember photos can show people's faces and homes.

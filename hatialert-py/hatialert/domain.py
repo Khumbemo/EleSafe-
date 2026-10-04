@@ -93,6 +93,36 @@ LIMITS = {
 }
 
 
+# Photos and voice notes. The type is read from the file's first bytes; the
+# name or type a phone reports is ignored.
+MEDIA = {
+    "photo": {"mimes": ["image/jpeg", "image/png", "image/webp"], "max_bytes": 1_500_000, "max_count": 6},
+    "voice": {"mimes": ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav"], "max_bytes": 2_000_000, "max_count": 2},
+}
+VOICE_MAX_SECONDS = 60
+
+
+def sniff_media(head: bytes) -> str | None:
+    """Media type from a file's leading bytes (16 are enough)."""
+    if head[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio/wav"
+    if head[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio/webm"
+    if head[:4] == b"OggS":
+        return "audio/ogg"
+    if head[4:8] == b"ftyp":
+        return "audio/mp4"
+    if head[:3] == b"ID3" or (len(head) > 1 and head[0] == 0xFF and head[1] in (0xFB, 0xF3, 0xF2, 0xFA)):
+        return "audio/mpeg"
+    return None
+
+
 def classify_severity(kind: str, herd_size: int, casualties: int) -> str:
     """Severity rules carried over unchanged from the original app."""
     if casualties > 0 or kind in ("death", "injury"):
@@ -226,6 +256,7 @@ def meta() -> dict:
         "alert_levels": [{"key": k, "label": v} for k, v in ALERT_LEVELS.items()],
         "directions": DIRECTIONS,
         "limits": LIMITS,
+        "media": {**MEDIA, "voice_max_seconds": VOICE_MAX_SECONDS},
         "contacts": CONTACTS,
         "safety": {k: [{"text": t, "local": n} for t, n in v] for k, v in SAFETY.items()},
         "compensation": {

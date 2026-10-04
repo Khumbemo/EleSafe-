@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS events (
     at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_incident ON events(incident_id);
+CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY,
+    incident_id INTEGER NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_incident ON attachments(incident_id);
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY,
     level TEXT NOT NULL,
@@ -137,7 +148,29 @@ class Store:
         return self.user(uid)
 
     # -- incidents -------------------------------------------------------
-    def add_incident(self, data: dict, reporter_id, at: int, sample=0) -> int:
+    def add_attachment(self, iid, kind, mime, data: bytes, uid, at, cur=None) -> int:
+        args = (iid, kind, mime, len(data), data, uid, at)
+        sql = "INSERT INTO attachments (incident_id, kind, mime, size, data, user_id, created_at) VALUES (?,?,?,?,?,?,?)"
+        if cur is not None:
+            return cur.execute(sql, args).lastrowid
+        return self.run(sql, args)
+
+    def attachments(self, iid) -> list[dict]:
+        return self.all(
+            "SELECT id, kind, mime, size, user_id, created_at FROM attachments WHERE incident_id = ? ORDER BY id", (iid,)
+        )
+
+    def attachment(self, aid) -> dict | None:
+        return self.one("SELECT * FROM attachments WHERE id = ?", (aid,))
+
+    def media_counts(self) -> dict[int, dict]:
+        rows = self.all("SELECT incident_id, kind, COUNT(*) AS n FROM attachments GROUP BY incident_id, kind")
+        out: dict[int, dict] = {}
+        for r in rows:
+            out.setdefault(r["incident_id"], {})[r["kind"]] = r["n"]
+        return out
+
+    def add_incident(self, data: dict, reporter_id, at: int, sample=0, media=()) -> int:
         with self.lock, self.db:
             cur = self.db.execute(
                 """INSERT INTO incidents (type, severity, status, herd_size, casualties, crop_acres,
@@ -155,6 +188,8 @@ class Store:
                 "INSERT INTO events (incident_id, status, note, user_id, at) VALUES (?,?,?,?,?)",
                 (iid, "reported", "", reporter_id, at),
             )
+            for kind, mime, blob in media:
+                self.add_attachment(iid, kind, mime, blob, reporter_id, at, cur=self.db)
         return iid
 
     def incident(self, iid) -> dict | None:
