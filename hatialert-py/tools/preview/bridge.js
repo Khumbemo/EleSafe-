@@ -28,7 +28,17 @@
     if (typeof WebAssembly !== "object") throw new Error("WebAssembly isn't available");
     say("Starting Python in your browser…");
     if (!window.loadPyodide) await loadScript(PYODIDE_JS);
-    const py = await window.loadPyodide({ indexURL: new URL("pyodide/", location.href).href, stdout: () => {}, stderr: () => {} });
+    // The standard library zip ships inside this page (#hati-stdlib, base64);
+    // answer Pyodide's request for it from there.
+    const b64 = document.getElementById("hati-stdlib").textContent.trim();
+    const zip = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const realFetch = window.fetch;
+    window.fetch = (input, init) => String(input && input.url ? input.url : input).endsWith("/python_stdlib.zip")
+      ? Promise.resolve(new Response(zip, { headers: { "Content-Type": "application/zip" } }))
+      : realFetch(input, init);
+    let py;
+    try { py = await window.loadPyodide({ indexURL: new URL("pyodide/", location.href).href, stdout: () => {}, stderr: () => {} }); }
+    finally { window.fetch = realFetch; }
     say("Loading HatiAlert…");
     py.FS.mkdirTree("/home/pyodide/hatialert");
     for (const [name, src] of Object.entries(PY_FILES)) py.FS.writeFile("/home/pyodide/hatialert/" + name, src);

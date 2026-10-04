@@ -71,7 +71,7 @@ node tools/parity.cjs          # the preview's JS fallback answers 52 requests e
 
 `tools/build_preview.py` builds a single page that runs this same `hatialert`
 package in the browser with [Pyodide](https://pyodide.org) on an in-memory
-SQLite database (saved to the viewer's browser). If a browser won't run
+SQLite database (saved to the viewer's browser; the standard-library zip is embedded in the page). If a browser won't run
 WebAssembly, the page switches to `tools/preview/fallback.js`, a JavaScript
 copy of the API that `tools/parity.cjs` keeps in step with `api.py`. The
 More screen shows which engine is running.

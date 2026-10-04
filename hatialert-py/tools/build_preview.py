@@ -4,11 +4,13 @@
 
 Writes index.html (body content for the artifact host), test.html (the same
 page as a full document, for local checks) and pyodide/ (runtime files that
-are published next to the page). The Python that runs in the page is the
+are published next to the page). Pyodide's standard-library zip is embedded
+in the page as base64 because the host doesn't serve .zip files. The Python that runs in the page is the
 hatialert package itself, copied in unchanged.
 """
 
 import argparse
+import base64
 import json
 import shutil
 import sys
@@ -21,7 +23,7 @@ from hatialert.api import App  # noqa: E402
 from hatialert.store import DEMO_ACCOUNTS, Store  # noqa: E402
 
 PY_MODULES = ["__init__.py", "domain.py", "security.py", "store.py", "api.py"]
-PYODIDE_FILES = ["pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
+PYODIDE_FILES = ["pyodide.asm.mjs", "pyodide.asm.wasm", "pyodide-lock.json"]  # stdlib zip is inlined
 FONTS = (
     "https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400"
     "&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@500&display=swap"
@@ -73,6 +75,7 @@ def main():
         f'<link rel="stylesheet" href="{FONTS}">',
         f"<style>\n{(web / 'app.css').read_text()}\n</style>",
         '<div id="app"></div>',
+        f'<script type="text/plain" id="hati-stdlib">{base64.b64encode((args.pyodide / "python_stdlib.zip").read_bytes()).decode()}</script>',
         f"<script>\n{script_safe((tools / 'fallback.js').read_text())}\n</script>",
         f"<script>\n{script_safe(bridge)}\n</script>",
         f"<script>\n{script_safe((web / 'app.js').read_text())}\n</script>",
