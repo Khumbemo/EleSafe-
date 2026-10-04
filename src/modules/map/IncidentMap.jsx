@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MapContainer, Marker, useMap, Circle } from 'react-leaflet';
+import { MapContainer, Marker, useMap, Circle, Tooltip } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import MapLayers from './MapLayers';
@@ -142,9 +142,9 @@ export default function IncidentMap() {
             position={[village.coordinates.lat, village.coordinates.lng]}
             icon={villageIcon}
           >
-            <L.Tooltip direction="top" offset={[0, -10]} opacity={0.9}>
+            <Tooltip direction="top" offset={[0, -10]} opacity={0.9}>
               {village.name} {village.forestFringe ? '(Fringe)' : ''}
-            </L.Tooltip>
+            </Tooltip>
           </Marker>
         ))}
 
