@@ -5,7 +5,9 @@ import json
 import math
 import unittest
 
-from hatialert import domain, security
+from pathlib import Path
+
+from hatialert import domain, geo, security
 from hatialert.api import App
 from hatialert.store import Store
 
@@ -84,6 +86,76 @@ class GeoTests(unittest.TestCase):
         # 2026-09-30 19:00 UTC is already October in IST
         ms = 1_790_794_800_000
         self.assertEqual(domain.reference(7, ms), "HA-2610-0007")
+
+
+class UtmTests(unittest.TestCase):
+    # Reference values from PROJ (pyproj, EPSG:4326 -> EPSG:32646)
+    REF = [((26.09717, 94.25817), (625817.193, 2887052.620)),
+           ((25.9208, 93.9549), (595630.908, 2867261.356)),
+           ((26.5595, 94.3908), (638530.297, 2938399.207))]
+
+    def test_forward_matches_proj(self):
+        for (lat, lon), (e, n) in self.REF:
+            got = geo.utm(lat, lon)
+            self.assertAlmostEqual(got[0], e, delta=0.01)
+            self.assertAlmostEqual(got[1], n, delta=0.01)
+
+    def test_inverse_round_trip(self):
+        for (lat, lon), _ in self.REF:
+            la, lo = geo.utm_inverse(*geo.utm(lat, lon))
+            self.assertAlmostEqual(la, lat, places=8)
+            self.assertAlmostEqual(lo, lon, places=8)
+
+
+def _unpack(p):
+    out, x, y = [], 0, 0
+    for i in range(0, len(p), 2):
+        x += p[i]; y += p[i + 1]
+        out.append((x * 10.0, y * 10.0))
+    return out
+
+
+def _inside(x, y, ring):
+    hit = False
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            hit = not hit
+    return hit
+
+
+class MapDataTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1] / "hatialert" / "web" / "map"
+        cls.layers = json.loads((root / "layers.json").read_text())
+        cls.terrain = root / "terrain.webp"
+
+    def test_files_and_extent(self):
+        self.assertTrue(self.terrain.exists())
+        self.assertEqual(self.layers["crs"].split()[0], "EPSG:32646")
+        e0, n0, e1, n1 = self.layers["extent"]
+        for v in domain.VILLAGES:
+            e, n = (c / 1000 for c in geo.utm(v["lat"], v["lng"]))
+            self.assertTrue(e0 < e < e1 and n0 < n < n1, v["name"])
+        for c in self.layers["contours"][:3] + self.layers["contours"][-3:]:
+            for p in c["paths"][:20]:
+                for x, y in _unpack(p):
+                    self.assertTrue(e0 * 1000 - 1 <= x <= e1 * 1000 + 1 and n0 * 1000 - 1 <= y <= n1 * 1000 + 1)
+
+    def test_villages_and_peak_inside_wokha(self):
+        wokha = next(d for d in self.layers["districts"] if d["name"] == "Wokha")
+        rings = [_unpack(r) for r in wokha["rings"]]
+        self.assertGreater(sum(len(r) for r in rings), 100)
+        for v in domain.VILLAGES:
+            x, y = geo.utm(v["lat"], v["lng"])
+            self.assertTrue(any(_inside(x, y, r) for r in rings), v["name"])
+        peak = self.layers["peaks"][0]
+        self.assertTrue(any(_inside(peak["e"] * 1000, peak["n"] * 1000, r) for r in rings))
+        self.assertTrue(1900 < peak["elev"] < 2100)  # Mount Tiyi, about 1,969 m
+
+    def test_only_checked_villages_marked_verified(self):
+        verified = [v["name"] for v in domain.VILLAGES if v["verified"]]
+        self.assertEqual(verified, ["Wokha Town"])
 
 
 class SecurityTests(unittest.TestCase):

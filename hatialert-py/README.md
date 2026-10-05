@@ -48,8 +48,16 @@ of **sample** incidents (an officer can remove them from the Home screen):
   within 5 km of a case. A warning stays active for 24 hours or until an
   all-clear for that village.
 - **Home** shows open incidents within your alert radius with distance and
-  compass direction, and a drawn map of the villages (no map tiles needed,
-  so it works on weak connections).
+  compass direction on a topographic map of Wokha district that works
+  offline (no tile server): shaded relief and 100 m contours from SRTM
+  elevation, streams derived from that elevation, Census 2011 district
+  boundaries, Mount Tiyi's spot height, a UTM zone 46N km grid, a scale bar
+  and a true geodesic alert ring. Zoom with the buttons, mouse wheel (click
+  the map first), two-finger pinch or the + / − / arrow keys.
+- **Nagamese** (sign-in screen or More > Language): the whole interface,
+  including server messages. The translation in `hatialert/web/nagamese.js`
+  is a draft that still needs a native speaker's review; edit that file to
+  correct it. Text people type is never translated.
 - **District overview** (officers): incidents per day, hotspot villages,
   median response time, losses, CSV export.
 - **Themes** (More > Theme): Green follows the phone's light or dark mode;
@@ -74,8 +82,9 @@ tools/          hosted-preview build (Pyodide) and the JS-fallback parity check
 ## Tests
 
 ```sh
-python -m unittest             # 29 tests: rules, geography, auth, workflow, media, alerts, stats, CSV
+python -m unittest             # 34 tests: rules, geography, UTM vs PROJ, map data, auth, workflow, media, alerts, stats, CSV
 node tools/parity.cjs          # the preview's JS fallback answers 68 requests exactly like api.py
+node tools/check_i18n.cjs      # Nagamese patterns are valid; the JS UTM maths matches PROJ
 ```
 
 ## Hosted preview
@@ -88,10 +97,28 @@ WebAssembly, the page switches to `tools/preview/fallback.js`, a JavaScript
 copy of the API that `tools/parity.cjs` keeps in step with `api.py`. The
 More screen shows which engine is running.
 
+## Map data
+
+`tools/build_map.py` rebuilds `hatialert/web/map/` (needs numpy, pillow,
+pyshp and contourpy for the build only):
+
+- Elevation: NASA SRTM via AWS Terrain Tiles (zoom 12, about 34 m), resampled
+  to a 40 m UTM grid. Hillshade uses Horn's method (sun 315°, 45° up).
+- Streams: priority-flood depression filling, D8 flow directions and flow
+  accumulation; drawn where the catchment exceeds 5 km², width by Strahler
+  order. They are modelled from the terrain, not surveyed.
+- Boundaries: Census of India 2011 districts (DataMeet, CC BY 2.5 India);
+  boundaries are approximate at village scale.
+- Projection: WGS 84 / UTM zone 46N (EPSG:32646), `hatialert/geo.py`,
+  checked against PROJ to under a millimetre.
+
 ## Before real use
 
-- **Village coordinates** come from the original app and look approximate.
-  Check them against Survey of India or Census village locations.
+- **Village coordinates:** only Wokha Town is checked (GeoNames). The other
+  nine come from the original app; they fall inside the district but are
+  not verified, and the map draws them as dashed "not verified" points.
+  Replace them with Survey of India, Census or OpenStreetMap points and set
+  `verified` in `hatialert/domain.py`.
 - **Forest-department phone numbers** are placeholders (marked in the app).
   112, 108 and 100 are the real national numbers.
 - **Compensation amounts** come from the original app. Confirm current

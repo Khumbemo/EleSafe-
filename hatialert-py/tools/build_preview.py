@@ -78,6 +78,7 @@ def main():
         f'<script type="text/plain" id="hati-stdlib">{base64.b64encode((args.pyodide / "python_stdlib.zip").read_bytes()).decode()}</script>',
         f"<script>\n{script_safe((tools / 'fallback.js').read_text())}\n</script>",
         f"<script>\n{script_safe(bridge)}\n</script>",
+        f"<script>\n{script_safe((web / 'nagamese.js').read_text())}\n</script>",
         f"<script>\n{script_safe((web / 'app.js').read_text())}\n</script>",
     ])
     out = args.out
@@ -90,6 +91,9 @@ def main():
     )
     for name in PYODIDE_FILES:
         shutil.copy2(args.pyodide / name, out / "pyodide" / name)
+    (out / "map").mkdir(exist_ok=True)
+    for name in ("layers.json", "terrain.webp"):
+        shutil.copy2(web / "map" / name, out / "map" / name)
     print(f"Built {out}/index.html ({len(body) // 1024} KB) with Pyodide {version}")
 
 

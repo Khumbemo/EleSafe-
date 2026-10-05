@@ -15,20 +15,23 @@ IST = timezone(timedelta(hours=5, minutes=30), "IST")
 DAY_MS = 86_400_000
 HOUR_MS = 3_600_000
 
-# Village list and coordinates carried over from the original app
-# (src/utils/constants.js). They are approximate and should be checked
-# against Survey of India / Census village points before field use.
+# Village points. Only Wokha Town is checked against a gazetteer (GeoNames).
+# The others came from the original app (src/utils/constants.js); they all
+# fall inside the Census 2011 district outline but have not been verified,
+# and the app marks them as such. Replace them with Survey of India, Census
+# or OpenStreetMap points before field use, and set "verified".
+_UNVERIFIED = "Original app, not verified"
 VILLAGES = [
-    {"name": "Wokha Town", "lat": 26.1040, "lng": 94.2601, "fringe": False},
-    {"name": "Wozhuro", "lat": 26.0912, "lng": 94.2434, "fringe": True},
-    {"name": "Baghty", "lat": 26.0780, "lng": 94.2200, "fringe": True},
-    {"name": "Sanis", "lat": 26.1230, "lng": 94.2890, "fringe": True},
-    {"name": "Ralan", "lat": 26.0650, "lng": 94.2750, "fringe": True},
-    {"name": "Englan", "lat": 26.1450, "lng": 94.3100, "fringe": True},
-    {"name": "Tening", "lat": 26.0500, "lng": 94.2100, "fringe": True},
-    {"name": "Bhandari", "lat": 26.1600, "lng": 94.2400, "fringe": False},
-    {"name": "Longsa", "lat": 26.0300, "lng": 94.3200, "fringe": True},
-    {"name": "Wosanda", "lat": 26.1100, "lng": 94.3400, "fringe": True},
+    {"name": "Wokha Town", "lat": 26.09717, "lng": 94.25817, "verified": True, "source": "GeoNames gazetteer"},
+    {"name": "Wozhuro", "lat": 26.0912, "lng": 94.2434, "verified": False, "source": _UNVERIFIED},
+    {"name": "Baghty", "lat": 26.0780, "lng": 94.2200, "verified": False, "source": _UNVERIFIED},
+    {"name": "Sanis", "lat": 26.1230, "lng": 94.2890, "verified": False, "source": _UNVERIFIED},
+    {"name": "Ralan", "lat": 26.0650, "lng": 94.2750, "verified": False, "source": _UNVERIFIED},
+    {"name": "Englan", "lat": 26.1450, "lng": 94.3100, "verified": False, "source": _UNVERIFIED},
+    {"name": "Tening", "lat": 26.0500, "lng": 94.2100, "verified": False, "source": _UNVERIFIED},
+    {"name": "Bhandari", "lat": 26.1600, "lng": 94.2400, "verified": False, "source": _UNVERIFIED},
+    {"name": "Longsa", "lat": 26.0300, "lng": 94.3200, "verified": False, "source": _UNVERIFIED},
+    {"name": "Wosanda", "lat": 26.1100, "lng": 94.3400, "verified": False, "source": _UNVERIFIED},
 ]
 VILLAGE_BY_NAME = {v["name"]: v for v in VILLAGES}
 

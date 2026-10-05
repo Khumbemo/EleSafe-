@@ -43,6 +43,64 @@
   }
   applyTheme(currentTheme());
 
+  // -- language ----------------------------------------------------------
+  // English is written in the templates. For Nagamese, a translator swaps
+  // interface text as it reaches the page (see nagamese.js). Elements marked
+  // translate="no" (messages, notes, names people typed) are left alone.
+  const LANGS = [{ key: "en", label: "English" }, { key: "nag", label: "Nagamese" }];
+  const NAG = window.HATI_NAGAMESE || { words: {}, patterns: [] };
+  const NAG_PATTERNS = NAG.patterns.map(([re, out]) => [new RegExp("^" + re + "$"), out]);
+  let lang = store.get("hatialert.lang") === "nag" ? "nag" : "en";
+  const isNag = () => lang === "nag";
+  function tr(text) {
+    if (lang !== "nag" || !text) return text;
+    const s = text.trim();
+    if (!s) return text;
+    let out = Object.prototype.hasOwnProperty.call(NAG.words, s) ? NAG.words[s] : undefined;
+    if (out === undefined) {
+      for (const [re, tpl] of NAG_PATTERNS) {
+        const m = s.match(re);
+        if (m) { out = tpl.replace(/\{(\d)\}/g, (_, k) => tr(m[+k] || "")); break; }
+      }
+    }
+    if (out === undefined) return text;
+    return text.slice(0, text.length - text.trimStart().length) + out + text.slice(text.trimEnd().length);
+  }
+  const TR_ATTRS = ["placeholder", "aria-label", "title", "alt"];
+  function translateNode(n) {
+    if (n.nodeType === 3) { const v = tr(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; return; }
+    if (n.nodeType !== 1 || n.getAttribute("translate") === "no" || n.tagName === "SCRIPT" || n.tagName === "STYLE") return;
+    for (const a of TR_ATTRS) {
+      const old = n.getAttribute(a);
+      if (old) { const v = tr(old); if (v !== old) n.setAttribute(a, v); }
+    }
+    if (n.tagName === "TEXTAREA") return; // its text is what the person typed
+    for (const c of n.childNodes) translateNode(c);
+  }
+  const skipped = (n) => !!(n.parentElement && n.parentElement.closest('[translate="no"]'));
+  new MutationObserver((muts) => {
+    if (lang !== "nag") return;
+    for (const m of muts) {
+      if (m.type === "characterData") { if (!skipped(m.target)) translateNode(m.target); }
+      else for (const n of m.addedNodes) if (!skipped(n)) translateNode(n);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  function setLang(key) {
+    lang = key === "nag" ? "nag" : "en";
+    store.set("hatialert.lang", lang);
+    document.documentElement.lang = lang === "nag" ? "nag" : "en";
+  }
+  document.documentElement.lang = lang === "nag" ? "nag" : "en";
+  const langPicker = (id) => `<div class="seg langs" role="group" aria-label="Language / Bhasa" translate="no" id="${id}">${LANGS.map((l) => `<button type="button" data-lang="${l.key}" aria-pressed="${lang === l.key}">${l.label}</button>`).join("")}</div>`;
+  function bindLangPicker(root, id) {
+    $$(`#${id} [data-lang]`, root).forEach((b) => (b.onclick = () => {
+      if (b.dataset.lang === lang) return;
+      setLang(b.dataset.lang);
+      router();
+      toast(lang === "nag" ? "Bhasa: Nagamese" : "Language: English");
+    }));
+  }
+
   const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
   function ago(ms) {
     const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -151,57 +209,257 @@
   }
 
   // -- map ---------------------------------------------------------------
-  function mapSvg({ incidents = [], home, radius = 0, focus = null }) {
+  // Real geography on the UTM zone 46N grid (EPSG:32646). Base layers come
+  // from map/layers.json and map/terrain.webp, built by tools/build_map.py
+  // from SRTM elevation and Census 2011 boundaries.
+  const utmKm = (() => {
+    const f = 1 / 298.257223563, n = f / (2 - f), A = 6378137 / (1 + n) * (1 + n * n / 4 + n ** 4 / 64);
+    const al = [n / 2 - 2 * n * n / 3 + 5 * n ** 3 / 16, 13 * n * n / 48 - 3 * n ** 3 / 5, 61 * n ** 3 / 240];
+    const c = 2 * Math.sqrt(n) / (1 + n), rad = Math.PI / 180;
+    return (lat, lon) => {
+      const phi = lat * rad, dl = (lon - 93) * rad;
+      const t = Math.sinh(Math.atanh(Math.sin(phi)) - c * Math.atanh(c * Math.sin(phi)));
+      const xi = Math.atan2(t, Math.cos(dl)), eta = Math.atanh(Math.sin(dl) / Math.sqrt(1 + t * t));
+      let e = eta, nn = xi;
+      al.forEach((a, j) => { const k = 2 * (j + 1); e += a * Math.cos(k * xi) * Math.sinh(k * eta); nn += a * Math.sin(k * xi) * Math.cosh(k * eta); });
+      return [(500000 + 0.9996 * A * e) / 1000, (0.9996 * A * nn) / 1000];
+    };
+  })();
+  // Point `km` from (lat, lng) on bearing `deg` (sphere, as in domain.py).
+  function destination(lat, lng, km, deg) {
+    const R = 6371.0088, d = km / R, th = deg * Math.PI / 180, p1 = lat * Math.PI / 180, l1 = lng * Math.PI / 180;
+    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(th));
+    const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    return [p2 * 180 / Math.PI, l2 * 180 / Math.PI];
+  }
+
+  let layersP = null;
+  function loadLayers() {
+    if (!layersP) layersP = fetch("map/layers.json").then((r) => (r.ok ? r.json() : null)).then((d) => (d ? prepareLayers(d) : null)).catch(() => null);
+    return layersP;
+  }
+  function prepareLayers(d) {
+    const [e0, n0, e1, n1] = d.extent;
+    const unpack = (p) => { const out = []; let x = 0, y = 0; for (let i = 0; i < p.length; i += 2) { x += p[i]; y += p[i + 1]; out.push([x / 100, y / 100]); } return out; };
+    const toD = (pts, close) => "M" + pts.map(([e, n]) => `${(e - e0).toFixed(2)},${(n1 - n).toFixed(2)}`).join("L") + (close ? "Z" : "");
+    const contourLabels = [];
+    const contours = { minor: "", index: "" };
+    for (const c of d.contours) {
+      for (const p of c.paths) {
+        const pts = unpack(p);
+        contours[c.index ? "index" : "minor"] += toD(pts);
+        if (c.index && pts.length > 20) {
+          const [e, n] = pts[pts.length >> 1];
+          // keep labels of one height at least 6 km apart
+          if (!contourLabels.some((l) => l.elev === c.elev && Math.hypot(l.e - e, l.n - n) < 6)) contourLabels.push({ e, n, elev: c.elev, text: c.elev.toLocaleString("en-IN") + " m" });
+        }
+      }
+    }
+    const streams = {};
+    for (const s of d.streams) streams[s.order] = (streams[s.order] || "") + toD(unpack(s.path));
+    const districts = d.districts.map((x) => {
+      const rings = x.rings.map(unpack);
+      const all = rings.flat();
+      return { name: x.name, state: x.state, d: rings.map((r) => toD(r, true)).join(""), ce: all.reduce((s, p) => s + p[0], 0) / all.length, cn: all.reduce((s, p) => s + p[1], 0) / all.length };
+    });
+    return { e0, n0, e1, n1, W: e1 - e0, H: n1 - n0, terrain: d.terrain.href, contours, contourLabels, streams, districts, peaks: d.peaks, attribution: d.attribution, step: d.contour_step };
+  }
+
+  const maps = new Map();
+  let mapSeq = 0;
+  // Returns HTML for a map; call mountMaps(root) after inserting it.
+  function mapBlock(opts) {
+    const id = "m" + ++mapSeq;
+    maps.set(id, opts);
+    return `<div class="mapbox" data-map="${id}">
+      <div class="mapframe" tabindex="0" aria-label="Map of Wokha district. Use plus and minus keys to zoom, arrow keys to move.">
+        <svg class="map" role="img" aria-label="Map of villages and open incidents"></svg>
+        <div class="mapctl"><button type="button" data-z="in" aria-label="Zoom in">+</button><button type="button" data-z="out" aria-label="Zoom out">−</button><button type="button" data-z="fit" aria-label="Fit to area">⤢</button></div>
+        <div class="scalebar" aria-hidden="true"><i></i><span></span></div>
+      </div>
+      ${mapLegend(opts.radius)}
+    </div>`;
+  }
+  function mapLegend(radius) {
+    return `<div class="legend">
+      <span><i class="dotk critical"></i>Critical</span><span><i class="dotk high"></i>High</span><span><i class="dotk medium"></i>Medium</span><span><i class="dotk low"></i>Low</span>
+      <span><i class="vk"></i>Village</span><span><i class="vk unv"></i>Village, position not verified</span>
+      ${radius ? `<span><i class="lk ring"></i>Your ${radius} km alert area</span>` : ""}
+      <span><i class="lk water"></i>Stream</span><span><i class="lk ct"></i>Contour, 100 m</span><span><i class="lk dist"></i>District boundary</span>
+    </div><p class="attrib" data-attrib></p>`;
+  }
+
+  function mountMaps(root) {
+    $$("[data-map]", root).forEach(async (box) => {
+      const opts = maps.get(box.dataset.map);
+      maps.delete(box.dataset.map);
+      if (!opts) return;
+      const L = await loadLayers();
+      if (!box.isConnected) return;
+      drawMap(box, opts, L);
+    });
+  }
+
+  function drawMap(box, { incidents = [], home, radius = 0, focus = null }, L) {
+    const svg = $("svg", box), frame = $(".mapframe", box);
     const V = state.meta.villages;
-    const lat0 = V.reduce((s, v) => s + v.lat, 0) / V.length;
-    const lng0 = V.reduce((s, v) => s + v.lng, 0) / V.length;
-    const kx = 111.32 * Math.cos((lat0 * Math.PI) / 180), ky = 110.57; // km per degree
-    const P = (lat, lng) => [(lng - lng0) * kx, -(lat - lat0) * ky];
-    const pts = [...V.map((v) => P(v.lat, v.lng)), ...incidents.map((i) => P(i.lat, i.lng))];
+    // Map space: x = easting - e0 (km), y = n1 - northing (km), north up.
+    const vp = V.map((v) => utmKm(v.lat, v.lng));
+    const ip = incidents.map((i) => utmKm(i.lat, i.lng));
+    const all = [...vp, ...ip];
+    const e0 = L ? L.e0 : Math.min(...all.map((p) => p[0])) - 15, n1 = L ? L.n1 : Math.max(...all.map((p) => p[1])) + 15;
+    const W = L ? L.W : 30 + Math.max(...all.map((p) => p[0])) - Math.min(...all.map((p) => p[0])), H = L ? L.H : 30 + Math.max(...all.map((p) => p[1])) - Math.min(...all.map((p) => p[1]));
+    const X = ([e]) => e - e0, Y = ([, n]) => n1 - n;
     const hv = V.find((v) => v.name === home);
-    const ringKm = Math.min(radius, 6);
-    if (hv && ringKm) { const [x, y] = P(hv.lat, hv.lng); pts.push([x - ringKm, y - ringKm], [x + ringKm, y + ringKm]); }
-    const pad = 1.6;
-    const minX = Math.min(...pts.map((p) => p[0])) - pad, maxX = Math.max(...pts.map((p) => p[0])) + pad;
-    const minY = Math.min(...pts.map((p) => p[1])) - pad, maxY = Math.max(...pts.map((p) => p[1])) + pad;
-    const W = 420, s = W / (maxX - minX), H = Math.round((maxY - minY) * s);
-    const X = (km) => ((km - minX) * s).toFixed(1), Y = (km) => ((km - minY) * s).toFixed(1);
-    let g = "";
-    for (let k = Math.ceil(minX / 2) * 2; k <= maxX; k += 2) g += `<line class="grid" x1="${X(k)}" y1="0" x2="${X(k)}" y2="${H}"/>`;
-    for (let k = Math.ceil(minY / 2) * 2; k <= maxY; k += 2) g += `<line class="grid" x1="0" y1="${Y(k)}" x2="${W}" y2="${Y(k)}"/>`;
+    const f2 = (v) => v.toFixed(3);
+
+    let base = `<defs><marker id="arrow-${box.dataset.map}" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto-start-reverse"><path class="arrowhead" d="M0 0 10 5 0 10z"/></marker></defs>
+      <rect class="land" x="${-W}" y="${-H}" width="${3 * W}" height="${3 * H}"/>`;
+    if (L) {
+      const wokha = L.districts.find((d) => d.name === "Wokha");
+      base += `<image class="relief" href="${L.terrain}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="none"/>`;
+      if (wokha) base += `<path class="outside" fill-rule="evenodd" d="M${-W},${-H}H${2 * W}V${2 * H}H${-W}Z${wokha.d}"/>`;
+      base += `<path class="ct" d="${L.contours.minor}"/><path class="ct idx" d="${L.contours.index}"/>`;
+      base += Object.entries(L.streams).map(([o, d]) => `<path class="water o${o}" d="${d}"/>`).join("");
+      base += L.districts.filter((d) => d.name !== "Wokha").map((d) => `<path class="dist ${d.state === "Assam" ? "assam" : ""}" d="${d.d}"/>`).join("");
+      if (wokha) base += `<path class="dist wokha" d="${wokha.d}"/>`;
+    }
+    base += `<g class="grid"></g>`;
     if (hv && radius) {
-      const [x, y] = P(hv.lat, hv.lng);
-      g += `<circle class="ring" cx="${X(x)}" cy="${Y(y)}" r="${(radius * s).toFixed(1)}"/>`;
+      const ring = Array.from({ length: 73 }, (_, k) => utmKm(...destination(hv.lat, hv.lng, radius, k * 5)));
+      base += `<path class="ring" d="M${ring.map((p) => `${f2(X(p))},${f2(Y(p))}`).join("L")}Z"/>`;
     }
-    let labels = "";
-    for (const v of V) {
-      const [x, y] = P(v.lat, v.lng);
-      const right = (x - minX) * s < W - 80;
-      const cls = v.name === home ? " home" : "";
-      g += `<circle class="vdot${cls}" cx="${X(x)}" cy="${Y(y)}" r="${cls ? 6 : 4.5}"/>`;
-      labels += `<text class="vlabel${cls}" x="${(+X(x) + (right ? 8 : -8)).toFixed(1)}" y="${(+Y(y) + 4).toFixed(1)}" text-anchor="${right ? "start" : "end"}">${esc(v.name)}</text>`;
+    // Pins are drawn in screen pixels around (0,0) and scaled on zoom.
+    let pins = "";
+    const pin = (p, inner, cls = "") => `<g class="pin ${cls}" data-x="${f2(X(p))}" data-y="${f2(Y(p))}">${inner}</g>`;
+    if (L) {
+      for (const d of L.districts) if (d.name !== "Wokha") pins += pin([d.ce, d.cn], `<text class="dname" text-anchor="middle">${esc(d.name.toUpperCase())}</text>`, "dlabel");
+      for (const c of L.contourLabels) pins += pin([c.e, c.n], `<text class="clabel" text-anchor="middle" y="3">${esc(c.text)}</text>`, "clab");
+      for (const pk of L.peaks) pins += pin([pk.e, pk.n], `<path class="peak" d="M0,-7 L6,4 L-6,4Z"/><text class="plabel" text-anchor="middle" y="17">${esc(pk.name || "")}</text><text class="plabel elev" text-anchor="middle" y="29">${pk.elev.toLocaleString("en-IN")} m</text>`);
     }
+    V.forEach((v, k) => {
+      const isHome = v.name === home;
+      pins += pin(vp[k], `<circle class="vdot${isHome ? " home" : ""}${v.verified ? "" : " unv"}" r="${isHome ? 6 : 4.5}"/><text class="vlabel${isHome ? " home" : ""}" x="9" y="4">${esc(v.name)}</text><title>${esc(v.name)}: ${esc(v.verified ? v.source : "position not verified")}</title>`, "vpin");
+    });
     const dirs = state.meta.directions;
-    for (const i of incidents) {
-      const [x, y] = P(i.lat, i.lng);
+    incidents.forEach((i, k) => {
       const r = 7 + Math.min(i.herd_size || 0, 20) * 0.35;
       let arrow = "";
       if (i.heading) {
-        const a = (dirs.indexOf(i.heading) * 45 * Math.PI) / 180, len = 1.15 * s;
-        const sx = +X(x) + Math.sin(a) * (r + 2), sy = +Y(y) - Math.cos(a) * (r + 2);
-        arrow = `<line class="heading" x1="${sx.toFixed(1)}" y1="${sy.toFixed(1)}" x2="${(sx + Math.sin(a) * len).toFixed(1)}" y2="${(sy - Math.cos(a) * len).toFixed(1)}"/>`;
+        const a = dirs.indexOf(i.heading) * 45 * Math.PI / 180, s0 = r + 2, s1 = r + 24;
+        arrow = `<line class="heading" marker-end="url(#arrow-${box.dataset.map})" x1="${(Math.sin(a) * s0).toFixed(1)}" y1="${(-Math.cos(a) * s0).toFixed(1)}" x2="${(Math.sin(a) * s1).toFixed(1)}" y2="${(-Math.cos(a) * s1).toFixed(1)}"/>`;
       }
       const label = `${i.type_label}, ${i.severity_label} severity, near ${i.village}, ${ago(i.created_at)}`;
-      g += `${arrow}<a href="#/case/${i.id}" aria-label="${esc(label)}"><title>${esc(label)}</title><circle class="inc ${esc(i.severity)}${i.id === focus ? " focus" : ""}" cx="${X(x)}" cy="${Y(y)}" r="${r.toFixed(1)}"/></a>`;
+      pins += pin(ip[k], `${arrow}<a href="#/case/${i.id}" aria-label="${esc(label)}"><title>${esc(label)}</title><circle class="inc ${esc(i.severity)}${i.id === focus ? " focus" : ""}" r="${r.toFixed(1)}"/></a>`, "ipin");
+    });
+    base += `<g class="pins">${pins}</g>`;
+    svg.innerHTML = base;
+    const attrib = $("[data-attrib]", box);
+    if (attrib) attrib.textContent = L ? "UTM zone 46N grid, km. " + L.attribution.join(". ") + ". Mount Tiyi height from SRTM." : "Base map unavailable; showing villages and incidents only.";
+
+    // -- view: x, y = top-left corner, w = width, all in km --------------
+    const pinEls = $$(".pin", svg).map((g) => ({ g, x: +g.dataset.x, y: +g.dataset.y }));
+    const gridG = $(".grid", svg);
+    let view = null;
+    const aspect = () => (frame.clientHeight || 300) / (frame.clientWidth || 400);
+    function fit() {
+      const pts = [...(incidents.length ? ip : []), ...(hv ? [utmKm(hv.lat, hv.lng)] : [])];
+      if (hv && radius) { const c = utmKm(hv.lat, hv.lng); pts.push([c[0] - radius, c[1] - radius], [c[0] + radius, c[1] + radius]); }
+      if (!pts.length || (focus && ip.length === 1 && !radius)) pts.push(...(focus ? [[ip[0][0] - 4, ip[0][1] - 4], [ip[0][0] + 4, ip[0][1] + 4]] : vp));
+      const xs = pts.map(X), ys = pts.map(Y);
+      let w = Math.max(8, Math.max(...xs) - Math.min(...xs) + 3), h = Math.max(...ys) - Math.min(...ys) + 3;
+      w = Math.max(w, h / aspect());
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      set({ x: cx - w / 2, y: cy - (w * aspect()) / 2, w });
     }
-    g += labels;
-    const bar = 2 * s;
-    g += `<line class="scale" x1="16" y1="${H - 16}" x2="${(16 + bar).toFixed(1)}" y2="${H - 16}"/><line class="scale" x1="16" y1="${H - 21}" x2="16" y2="${H - 11}"/><line class="scale" x1="${(16 + bar).toFixed(1)}" y1="${H - 21}" x2="${(16 + bar).toFixed(1)}" y2="${H - 11}"/><text class="scaletext" x="${(16 + bar / 2).toFixed(1)}" y="${H - 24}" text-anchor="middle">2 km</text>`;
-    g += `<text class="north" x="${W - 18}" y="22" text-anchor="middle">N</text><path class="northmark" d="M${W - 18} 27 l-5 10 h10 z"/>`;
-    return `<svg class="map" viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of villages around Wokha with open incidents">
-      <defs><marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z"/></marker></defs>${g}</svg>`;
+    function set(v) {
+      const maxW = Math.max(W, H / aspect()) * 1.02;
+      const w = Math.min(maxW, Math.max(1.5, v.w)), h = w * aspect();
+      const x = w >= W ? (W - w) / 2 : Math.min(Math.max(v.x, -w * 0.1), W - w * 0.9);
+      const y = h >= H ? (H - h) / 2 : Math.min(Math.max(v.y, -h * 0.1), H - h * 0.9);
+      view = { x, y, w };
+      svg.setAttribute("viewBox", `${x.toFixed(3)} ${y.toFixed(3)} ${w.toFixed(3)} ${h.toFixed(3)}`);
+      const k = w / (frame.clientWidth || 400); // km per screen pixel
+      for (const p of pinEls) p.g.setAttribute("transform", `translate(${p.x} ${p.y}) scale(${k.toFixed(5)})`);
+      svg.classList.toggle("far", w > 30);
+      svg.classList.toggle("mid", w > 9 && w <= 30);
+      // grid every 1, 2, 5, 10 or 20 km so 3–8 lines cross the view
+      const step = [1, 2, 5, 10, 20].find((s) => w / s <= 8) || 20;
+      let g = "";
+      for (let gx = Math.ceil((e0 + x) / step) * step; gx <= e0 + x + w; gx += step) {
+        const sx = gx - e0;
+        g += `<line x1="${sx}" y1="${y}" x2="${sx}" y2="${y + h}"/><text x="${sx + 3 * k}" y="${y + 12 * k}" font-size="${(10 * k).toFixed(4)}">${gx}E</text>`;
+      }
+      for (let gy = Math.ceil((n1 - y - h) / step) * step; gy <= n1 - y; gy += step) {
+        const sy = n1 - gy;
+        g += `<line x1="${x}" y1="${sy}" x2="${x + w}" y2="${sy}"/><text x="${x + 3 * k}" y="${sy - 3 * k}" font-size="${(10 * k).toFixed(4)}">${gy}N</text>`;
+      }
+      gridG.innerHTML = g;
+      svg.style.setProperty("--gs", `${(3 * k).toFixed(4)}px`);
+      // scale bar: a round distance near 90 px
+      const target = 90 * k, nice = [0.25, 0.5, 1, 2, 5, 10, 20, 50].find((s) => s >= target * 0.6) || 50;
+      const sb = $(".scalebar", box);
+      $("i", sb).style.width = `${(nice / k).toFixed(0)}px`;
+      $("span", sb).textContent = nice < 1 ? `${nice * 1000} m` : `${nice} km`;
+    }
+    const zoomAt = (factor, px, py) => {
+      const r = frame.getBoundingClientRect();
+      const fx = px === undefined ? 0.5 : (px - r.left) / r.width, fy = py === undefined ? 0.5 : (py - r.top) / r.height;
+      const w = view.w * factor, h0 = view.w * aspect();
+      set({ x: view.x + fx * (view.w - w), y: view.y + fy * (h0 - w * aspect()), w });
+    };
+    $(".mapctl", box).onclick = (e) => {
+      const b = e.target.closest("[data-z]");
+      if (!b) return;
+      if (b.dataset.z === "fit") fit(); else zoomAt(b.dataset.z === "in" ? 0.6 : 1 / 0.6);
+    };
+    frame.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey && document.activeElement !== frame) return; // let the page scroll
+      e.preventDefault();
+      zoomAt(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX, e.clientY);
+    }, { passive: false });
+    frame.addEventListener("dblclick", (e) => { e.preventDefault(); zoomAt(0.5, e.clientX, e.clientY); });
+    frame.addEventListener("keydown", (e) => {
+      const k = view.w / 6, map = { "+": () => zoomAt(0.7), "=": () => zoomAt(0.7), "-": () => zoomAt(1 / 0.7), "0": fit,
+        ArrowLeft: () => set({ ...view, x: view.x - k }), ArrowRight: () => set({ ...view, x: view.x + k }),
+        ArrowUp: () => set({ ...view, y: view.y - k }), ArrowDown: () => set({ ...view, y: view.y + k }) };
+      if (map[e.key]) { e.preventDefault(); map[e.key](); }
+    });
+    // Mouse drag pans; on touch screens one finger scrolls the page and two
+    // fingers pinch-zoom and pan the map.
+    const pts = new Map();
+    let last = null, moved = 0;
+    svg.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // Capture only for a pinch here; a mouse is captured once it really
+      // drags, so a plain click still reaches incident links.
+      if (pts.size === 2) for (const id of pts.keys()) svg.setPointerCapture(id);
+      last = null; moved = 0;
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType !== "mouse" && pts.size < 2) return;
+      const ps = [...pts.values()];
+      const cx = ps.reduce((s, p) => s + p.x, 0) / ps.length, cy = ps.reduce((s, p) => s + p.y, 0) / ps.length;
+      const span = ps.length > 1 ? Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) : 0;
+      if (last) {
+        const k = view.w / frame.clientWidth;
+        moved += Math.abs(cx - last.cx) + Math.abs(cy - last.cy);
+        if (moved > 6 && e.pointerType === "mouse" && !svg.hasPointerCapture(e.pointerId)) svg.setPointerCapture(e.pointerId);
+        set({ ...view, x: view.x - (cx - last.cx) * k, y: view.y - (cy - last.cy) * k });
+        if (span && last.span) zoomAt(last.span / span, cx, cy);
+      }
+      last = { cx, cy, span };
+    });
+    const up = (e) => { pts.delete(e.pointerId); last = null; };
+    svg.addEventListener("pointerup", up);
+    svg.addEventListener("pointercancel", up);
+    svg.addEventListener("click", (e) => { if (moved > 6) { e.preventDefault(); e.stopPropagation(); } }, true);
+    new ResizeObserver(() => view && set(view)).observe(frame);
+    fit();
   }
-  const legend = (radius) => `<div class="legend"><span><i class="critical"></i>Critical</span><span><i class="high"></i>High</span><span><i class="medium"></i>Medium</span><span><i class="low"></i>Low</span>${radius ? `<span>Dashed ring: your ${radius} km alert area</span>` : ""}<span>Arrow: herd heading</span></div>`;
 
   function incidentItem(i, extra = "") {
     return `<a class="item stripe ${esc(i.severity)}" href="#/case/${i.id}">
@@ -221,7 +479,7 @@
     const demo = state.meta.demo_accounts;
     const main = authShell(`
       <div class="hero">
-        <div class="row">${MARK}<b class="label">HatiAlert · Wokha</b></div>
+        <div class="row between"><div class="row">${MARK}<b class="label">HatiAlert · Wokha</b></div>${langPicker("lang-login")}</div>
         <h1>See elephants? Warn your village in a minute.</h1>
         <p class="muted">Report sightings and crop raids, follow what the forest staff do about them, and get warnings for your village.</p>
       </div>
@@ -235,6 +493,7 @@
       </form>
       ${demo.length ? `<section class="card"><div class="stack"><h2>Try a demo account</h2><p class="small muted">Each role sees a different app. Tap one to fill in the form.</p></div>
         <div class="demo">${demo.map((d) => `<button type="button" data-phone="${esc(d.phone)}" data-pin="${esc(d.pin)}"><b>${esc(roleName[d.role])}</b><span class="mono muted">PIN ${esc(d.pin)}</span><span class="small muted">${esc(d.name)} · ${esc(d.village)}</span><span class="mono small muted">${esc(d.phone)}</span></button>`).join("")}</div></section>` : ""}`);
+    bindLangPicker(main, "lang-login");
     const form = $("#login", main);
     $$(".demo button", main).forEach((b) => (b.onclick = () => { $("#login-phone").value = b.dataset.phone; $("#login-pin").value = b.dataset.pin; form.requestSubmit(); }));
     form.onsubmit = async (e) => {
@@ -294,15 +553,16 @@
     catch (err) { return failure(main, err); }
     const w = o.warning;
     main.innerHTML = `
-      ${w ? `<a class="warning" href="#/alerts"><span class="label">Elephant warning · ${esc(o.village.name)}</span><p>${esc(w.message)}</p><span class="small muted">${ago(w.sent_at)}${w.by ? ` · ${esc(w.by)}` : ""}</span></a>` : ""}
+      ${w ? `<a class="warning" href="#/alerts"><span class="label">Elephant warning · ${esc(o.village.name)}</span><p translate="no">${esc(w.message)}</p><span class="small muted">${ago(w.sent_at)}${w.by ? ` · ${esc(w.by)}` : ""}</span></a>` : ""}
       <div class="pagehead"><span class="label">Within ${o.radius_km} km of ${esc(o.village.name)}</span>
         <h1>${o.nearby.length ? `${plural(o.nearby.length, "open incident")} near you` : "No open incidents near you"}</h1></div>
-      ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `<b>${i.km} km ${esc(i.dir)}</b> of ${esc(o.village.name)}`)).join("")}</section>`
+      ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `<b>${i.km} km ${esc(i.dir)} of ${esc(o.village.name)}</b>`)).join("")}</section>`
         : `<p class="muted">${o.open_total ? `${plural(o.open_total, "open incident")} elsewhere in the district.` : "All quiet across the district."} You'll see new reports here.</p>`}
       <div class="grid2"><a class="btn primary big" href="#/report">${icon("report")} Report elephants</a><a class="btn big" href="#/report/camera">${icon("camera")} Snap a photo and report</a></div>
-      <section class="card flush">${mapSvg({ incidents: open, home: o.village.name, radius: o.radius_km })}${legend(o.radius_km)}</section>
+      <section class="card flush">${mapBlock({ incidents: open, home: o.village.name, radius: o.radius_km })}</section>
       ${isStaff() ? `<div class="kpis"><div class="kpi"><small>Open in district</small><b>${o.open_total}</b></div><div class="kpi"><small>Waiting for a check</small><b>${o.awaiting_check}</b></div><div class="kpi"><small>Reported in 24 h</small><b>${o.reported_24h}</b></div></div>` : ""}
       ${o.has_sample && state.user.role === "officer" ? `<div class="notice"><span>Sample incidents are loaded so you can try the app.</span><span class="confirm" id="sample"><button class="btn small" data-ask>Remove sample data</button></span></div>` : ""}`;
+    mountMaps(main);
     const sample = $("#sample", main);
     if (sample) {
       sample.onclick = async (e) => {
@@ -517,7 +777,7 @@
       <div class="pagehead"><h1>Report elephants</h1><p class="muted">Only "what happened" is required. Send it now and add detail if you can.</p></div>
       <form id="rep" class="stack" novalidate>
         <section class="card" data-field="type"><h2>What's happening?</h2>
-          <div class="types">${m.types.map((t) => `<button type="button" class="type" data-type="${t.key}" aria-pressed="false"><b>${esc(t.label)}</b><small>${esc(t.local)}</small></button>`).join("")}</div></section>
+          <div class="types">${m.types.map((t) => `<button type="button" class="type" data-type="${t.key}" aria-pressed="false"><b>${esc(t.label)}</b><small translate="no">${esc(isNag() ? t.label : t.local)}</small></button>`).join("")}</div></section>
         <section class="card" data-field="attachments"><h2>Photo and voice note</h2>
           <p class="small muted">Optional. Take photos only from a safe distance. Never go closer to a herd for a picture.</p>
           <div class="row"><button type="button" class="btn" id="rep-cam">${icon("camera")} Take photo</button><button type="button" class="btn" id="rep-gallery">${icon("image")} From gallery</button><span id="rep-voice"></span></div>
@@ -627,7 +887,7 @@
           <section class="card">
             <span class="label">Report sent</span>
             <h1>Thank you. Your report number is <span class="mono">${esc(inc.ref)}</span></h1>
-            <div class="row">${sevPill(inc.severity, inc.severity_label + " severity")}<span class="muted">${esc(inc.type_label)} · ${esc(inc.village)}${inc.attachments.length ? ` · ${plural(inc.attachments.filter((a) => a.kind === "photo").length, "photo")}, ${plural(inc.attachments.filter((a) => a.kind === "voice").length, "voice note")}` : ""}</span></div>
+            <div class="row">${sevPill(inc.severity, inc.severity_label + " severity")}<span class="muted"><span>${esc(inc.type_label)}</span> · <span translate="no">${esc(inc.village)}</span>${inc.attachments.length ? ` · <span>${plural(inc.attachments.filter((a) => a.kind === "photo").length, "photo")}, ${plural(inc.attachments.filter((a) => a.kind === "voice").length, "voice note")}</span>` : ""}</span></div>
             <p>A forest guard will check it. Keep this number for any compensation claim.</p>
             <p class="muted">Stay well away from the herd and warn your neighbours.</p>
             <div class="row"><a class="btn primary" href="#/case/${inc.id}">View report</a><a class="btn" href="#/home">Back to home</a></div>
@@ -679,20 +939,21 @@
       <div class="pagehead"><a class="small" href="#/cases">← ${staff ? "Cases" : "My reports"}</a>
         <div class="row between"><h1>${esc(i.type_label)}</h1>${sevPill(i.severity, i.severity_label)}</div>
         <p class="muted"><span class="mono">${esc(i.ref)}</span> · ${esc(i.status_label)}${i.sample ? ' · <span class="tag">Sample</span>' : ""}</p></div>
-      <section class="card flush">${mapSvg({ incidents: [i], home: state.user.village, focus: i.id })}</section>
+      <section class="card flush">${mapBlock({ incidents: [i], home: state.user.village, focus: i.id })}</section>
       <section class="card"><dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
-        ${i.description ? `<p>${esc(i.description)}</p>` : ""}</section>
+        ${i.description ? `<p translate="no">${esc(i.description)}</p>` : ""}</section>
       ${i.attachments.length || i.can_attach ? `<section class="card" id="case-media"><h2>Photos and voice notes</h2>
         ${i.attachments.length ? `<div class="thumbs">${mediaTiles(i.attachments, false)}</div>` : '<p class="small muted">None yet.</p>'}
         ${i.can_attach ? `<div class="row"><button type="button" class="btn small" id="case-cam">${icon("camera")} Add photo</button><span id="case-voice"></span></div>` : ""}</section>` : ""}
       <section class="card"><h2>What has happened</h2>
-        <ol class="timeline">${i.events.map((e, k) => `<li><span class="dot"></span><div><b>${k && e.status === i.events[k - 1].status ? "Update" : esc(e.status_label)}</b> <span class="small muted">${when(e.at)}${e.by ? ` · ${esc(e.by)}` : ""}</span>${e.note ? `<p>${esc(e.note)}</p>` : ""}</div></li>`).join("")}</ol></section>
+        <ol class="timeline">${i.events.map((e, k) => `<li><span class="dot"></span><div><b>${k && e.status === i.events[k - 1].status ? "Update" : esc(e.status_label)}</b> <span class="small muted">${when(e.at)}${e.by ? ` · ${esc(e.by)}` : ""}</span>${e.note ? `<p translate="no">${esc(e.note)}</p>` : ""}</div></li>`).join("")}</ol></section>
       ${staff ? `<form class="card" id="act" novalidate><h2>Staff action</h2>
         <label class="field" data-field="note"><span>Note <small>(team sent, damage seen, advice given)</small></span><textarea id="act-note" maxlength="500"></textarea></label>
         <div data-errors></div>
         <div class="row">${i.next.map((s) => `<button type="button" class="btn ${s === "false_report" ? "" : "primary"}" data-status="${s}">${verbs[s]}</button>`).join("")}<button type="button" class="btn" data-status="">Add note only</button></div>
         ${i.open ? `<div class="row between split"><span class="small muted">Tell villages within 5 km.</span><button type="button" class="btn" id="warn">Warn nearby villages</button></div>` : ""}
       </form>` : ""}`;
+    mountMaps(main);
     const mediaBox = $("#case-media", main);
     if (mediaBox) {
       hydrateMedia(mediaBox);
@@ -758,7 +1019,7 @@
       <section class="card flush divide">${list.length ? list.map((a) => `
         <article class="item stripe ${a.level === "warning" ? "critical" : a.level === "all_clear" ? "low" : ""}">
           <h3>${esc(a.level_label)}${a.active ? ' <span class="sev sev-critical">Active</span>' : ""}</h3><span class="small muted">${ago(a.sent_at)}</span>
-          <p class="full">${esc(a.message)}</p>
+          <p class="full" translate="no">${esc(a.message)}</p>
           <div class="meta"><span class="chips">${a.villages.map((v) => `<span class="tag ${v === state.user.village ? "me" : ""}">${esc(v)}</span>`).join("")}</span>${a.by ? `<span>${esc(a.by)}</span>` : ""}${a.incident_id ? `<a href="#/case/${a.incident_id}">View case</a>` : ""}</div>
         </article>`).join("") : `<div class="empty"><b>No alerts yet</b><span>Warnings for your village will show here.</span></div>`}</section>`;
     const form = $("#compose", main);
@@ -851,7 +1112,7 @@
   // -- guide & more ------------------------------------------------------
   function viewGuide() {
     const { safety, contacts, compensation } = state.meta;
-    const list = (items, mark) => `<ul class="stack plain">${items.map((i) => `<li class="row top"><b aria-hidden="true">${mark}</b><div class="grow"><p>${esc(i.text)}</p>${i.local ? `<p class="small muted"><i>${esc(i.local)}</i></p>` : ""}</div></li>`).join("")}</ul>`;
+    const list = (items, mark) => `<ul class="stack plain">${items.map((i) => `<li class="row top"><b aria-hidden="true">${mark}</b><div class="grow"><p>${esc(i.text)}</p>${isNag() ? `<p class="small muted" translate="no"><i>${esc(i.text)}</i></p>` : i.local ? `<p class="small muted"><i>${esc(i.local)}</i></p>` : ""}</div></li>`).join("")}</ul>`;
     const main = shell("more", `
       <div class="pagehead"><a class="small" href="#/more">← More</a><h1>Safety and help</h1></div>
       <div class="grid2">
@@ -877,6 +1138,10 @@
         ${u.role === "officer" ? `<a class="item" href="#/dashboard"><h3>District overview</h3><span class="muted">→</span><div class="meta">Trends, hotspots, response times, CSV export</div></a>` : ""}
         <a class="item" href="#/guide"><h3>Safety and help</h3><span class="muted">→</span><div class="meta">What to do, emergency numbers, compensation</div></a>
       </section>
+      <section class="card"><h2 translate="no">${isNag() ? "Bhasa (Language)" : "Language (Bhasa)"}</h2>
+        ${langPicker("lang-more")}
+        ${isNag() ? `<p class="small muted" translate="no">Nagamese translation is a draft and has not been checked by a native speaker. Please tell the forest office about anything that reads wrong. / Etu Nagamese translation etiya kacha ase. Kiba bhul dikhile forest office ke kobi.</p>` : ""}
+      </section>
       <section class="card"><h2 id="theme-h">Theme</h2>
         <div class="themes" role="radiogroup" aria-labelledby="theme-h">${THEMES.map((t) => `<button type="button" class="theme-opt" role="radio" data-skin-key="${t.key}" aria-checked="${currentTheme() === t.key}" tabindex="${currentTheme() === t.key ? 0 : -1}"><span class="swatch sw-${t.key}" aria-hidden="true"><i></i><i></i><i></i><i></i></span><b>${esc(t.label)}</b><small>${esc(t.note)}</small></button>`).join("")}</div>
       </section>
@@ -890,6 +1155,7 @@
         <div><button class="btn primary" type="submit">Save</button></div>
       </form>
       <div class="row between"><button class="btn danger" id="out">Sign out</button><span class="small muted">Engine: ${esc(transport.engine)}</span></div>`);
+    bindLangPicker(main, "lang-more");
     const opts = $$("[data-skin-key]", main);
     const choose = (b, focus) => {
       store.set("hatialert.theme", b.dataset.skinKey);
