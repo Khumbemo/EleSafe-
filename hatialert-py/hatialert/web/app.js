@@ -27,6 +27,22 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* storage blocked */ } },
   };
+  // -- theme -------------------------------------------------------------
+  const THEMES = [
+    { key: "green", label: "Green", note: "Follows your phone's light or dark mode" },
+    { key: "white", label: "White", note: "Bright, for outdoors in daylight" },
+    { key: "dark", label: "Dark", note: "Black and grey, less glare at night" },
+    { key: "navy", label: "Navy blue", note: "Deep blue with sky-blue buttons" },
+  ];
+  const currentTheme = () => (THEMES.some((t) => t.key === store.get("hatialert.theme")) ? store.get("hatialert.theme") : "green");
+  function applyTheme(key) {
+    const root = document.documentElement;
+    if (key && key !== "green") root.dataset.skin = key; else delete root.dataset.skin;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = getComputedStyle(root).getPropertyValue("--bg").trim() || meta.content;
+  }
+  applyTheme(currentTheme());
+
   const plural = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
   function ago(ms) {
     const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -861,6 +877,9 @@
         ${u.role === "officer" ? `<a class="item" href="#/dashboard"><h3>District overview</h3><span class="muted">→</span><div class="meta">Trends, hotspots, response times, CSV export</div></a>` : ""}
         <a class="item" href="#/guide"><h3>Safety and help</h3><span class="muted">→</span><div class="meta">What to do, emergency numbers, compensation</div></a>
       </section>
+      <section class="card"><h2 id="theme-h">Theme</h2>
+        <div class="themes" role="radiogroup" aria-labelledby="theme-h">${THEMES.map((t) => `<button type="button" class="theme-opt" role="radio" data-skin-key="${t.key}" aria-checked="${currentTheme() === t.key}" tabindex="${currentTheme() === t.key ? 0 : -1}"><span class="swatch sw-${t.key}" aria-hidden="true"><i></i><i></i><i></i><i></i></span><b>${esc(t.label)}</b><small>${esc(t.note)}</small></button>`).join("")}</div>
+      </section>
       <form class="card" id="prof" novalidate><h2>Your settings</h2>
         <label class="field" data-field="name"><span>Name</span><input id="prof-name" type="text" maxlength="60" value="${esc(u.name)}"></label>
         <div class="grid2">
@@ -871,6 +890,20 @@
         <div><button class="btn primary" type="submit">Save</button></div>
       </form>
       <div class="row between"><button class="btn danger" id="out">Sign out</button><span class="small muted">Engine: ${esc(transport.engine)}</span></div>`);
+    const opts = $$("[data-skin-key]", main);
+    const choose = (b, focus) => {
+      store.set("hatialert.theme", b.dataset.skinKey);
+      applyTheme(b.dataset.skinKey);
+      opts.forEach((o) => { o.setAttribute("aria-checked", String(o === b)); o.tabIndex = o === b ? 0 : -1; });
+      if (focus) b.focus();
+    };
+    opts.forEach((b, k) => {
+      b.onclick = () => { choose(b); toast(`Theme: ${THEMES[k].label}`); };
+      b.onkeydown = (e) => {
+        const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (d) { e.preventDefault(); choose(opts[(k + d + opts.length) % opts.length], true); }
+      };
+    });
     const form = $("#prof", main);
     form.onsubmit = async (e) => {
       e.preventDefault();

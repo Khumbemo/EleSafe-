@@ -52,6 +52,9 @@ of **sample** incidents (an officer can remove them from the Home screen):
   so it works on weak connections).
 - **District overview** (officers): incidents per day, hotspot villages,
   median response time, losses, CSV export.
+- **Themes** (More > Theme): Green follows the phone's light or dark mode;
+  White, Dark and Navy blue are fixed. The choice is kept on the device.
+  Every text colour pair meets WCAG AA contrast (4.5:1).
 - Safety guidance, emergency numbers and compensation steps.
 
 ## Layout

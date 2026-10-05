@@ -1,4 +1,7 @@
-/* Layout: one calm column on phones with a bottom tab bar; a left rail and a
+/* Themes: green (default) follows the device's light/dark setting; white,
+   dark and navy are fixed and set with data-skin on <html> (see the end of
+   this file). Every pair used for text passes WCAG AA (4.5:1).
+   Layout: one calm column on phones with a bottom tab bar; a left rail and a
    centred 46rem column on wide screens. Colour carries severity, not decoration. */
 :root {
   --bg: #f3f5f2;
@@ -11,8 +14,8 @@
   --accent-ink: #ffffff;
   --accent-soft: #dfece5;
   --crit: #b3261e;
-  --high: #b9521a;
-  --med: #8f6b00;
+  --high: #a8481a;
+  --med: #7f5f00;
   --low: #2c7349;
   --crit-soft: #fae3e0;
   --high-soft: #fbe8db;
@@ -317,3 +320,40 @@ a.item:hover { background: var(--sunken); }
 .lightbox { grid-template-rows: 1fr; place-items: center; padding: 16px; cursor: zoom-out; }
 .lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .lightbox .cam-btn { position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; }
+
+/* -- themes chosen in More > Theme. Declared last so they win over the
+   automatic light/dark blocks above. */
+:root[data-skin="white"] {
+  --bg: #ffffff; --surface: #ffffff; --sunken: #f1f2f4; --ink: #14171a; --muted: #5a6069; --line: #e1e4e8;
+  --accent: #1f2328; --accent-ink: #ffffff; --accent-soft: #eceef1;
+  --crit: #b3261e; --high: #b04a12; --med: #7f5f00; --low: #23683f;
+  --crit-soft: #fbe6e4; --high-soft: #fcebdf; --med-soft: #f6efd3; --low-soft: #e2f2e8;
+  --focus: #2563eb; color-scheme: light;
+}
+:root[data-skin="dark"] {
+  --bg: #111111; --surface: #1b1b1d; --sunken: #252528; --ink: #ececec; --muted: #a3a3a8; --line: #323236;
+  --accent: #ececec; --accent-ink: #111111; --accent-soft: #2c2c30;
+  --crit: #ff7f76; --high: #ffa36e; --med: #e2c35c; --low: #72d29d;
+  --crit-soft: #3a1f1d; --high-soft: #3a2819; --med-soft: #332d16; --low-soft: #18301f;
+  --focus: #8ab4ff; color-scheme: dark;
+}
+:root[data-skin="navy"] {
+  --bg: #0a1630; --surface: #10213f; --sunken: #172b4f; --ink: #e8eef8; --muted: #a3b3cc; --line: #24395d;
+  --accent: #7cb8ff; --accent-ink: #06122a; --accent-soft: #1b3763;
+  --crit: #ff8a80; --high: #ffab76; --med: #e9c96a; --low: #7ad7a4;
+  --crit-soft: #3c1f2e; --high-soft: #3a2a2a; --med-soft: #33301f; --low-soft: #14352f;
+  --focus: #ffd166; color-scheme: dark;
+}
+
+/* theme picker: each swatch previews its own theme, so its colours are fixed */
+.themes { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.theme-opt { display: grid; gap: 6px; text-align: left; padding: 12px; border-radius: var(--r); border: 1.5px solid var(--line); background: var(--surface); cursor: pointer; }
+.theme-opt[aria-checked="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.theme-opt small { color: var(--muted); font-size: 0.8rem; }
+.theme-opt[aria-checked="true"] b::after { content: " ✓"; color: var(--accent); }
+.swatch { display: flex; height: 34px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+.swatch i { flex: 1; }
+.sw-green i:nth-child(1) { background: #f3f5f2; } .sw-green i:nth-child(2) { background: #1d5a42; } .sw-green i:nth-child(3) { background: #0f1412; } .sw-green i:nth-child(4) { background: #7cc6a0; }
+.sw-white i:nth-child(1) { background: #ffffff; } .sw-white i:nth-child(2) { background: #f1f2f4; } .sw-white i:nth-child(3) { background: #1f2328; } .sw-white i:nth-child(4) { background: #ffffff; }
+.sw-dark i:nth-child(1) { background: #111111; } .sw-dark i:nth-child(2) { background: #252528; } .sw-dark i:nth-child(3) { background: #ececec; } .sw-dark i:nth-child(4) { background: #1b1b1d; }
+.sw-navy i:nth-child(1) { background: #0a1630; } .sw-navy i:nth-child(2) { background: #172b4f; } .sw-navy i:nth-child(3) { background: #7cb8ff; } .sw-navy i:nth-child(4) { background: #10213f; }
