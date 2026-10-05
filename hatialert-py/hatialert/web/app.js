@@ -120,22 +120,127 @@
     constructor(status, message, field) { super(message); this.status = status; this.field = field; }
   }
 
+  // Reading pages offline: successful GETs are kept on the phone and shown,
+  // with a notice, when the network is down.
+  const CACHEABLE = /^\/api\/(meta|me|overview|alerts|incidents(\?|$)|incidents\/\d+$)/;
+  // Saved copies are filed under the sign-in (or "pub" for public data) and
+  // wiped on sign-out, so a shared phone never shows one person's data to another.
+  const cacheKey = (path) => "hatialert.cache:" + (path === "/api/meta" ? "pub" : (state.token || "-").slice(0, 16)) + ":" + path;
+  // Keep "who is signed in" on the phone so the app opens offline.
+  const saveMe = (user) => { if (state.token && user) store.set(cacheKey("/api/me"), JSON.stringify({ at: Date.now(), data: user })); };
+  function clearCache() {
+    try { for (const k of Object.keys(localStorage)) if (k.startsWith("hatialert.cache:") && !k.startsWith("hatialert.cache:pub:")) localStorage.removeItem(k); } catch { /* blocked */ }
+  }
   async function api(method, path, body) {
     let res;
     try {
       res = await transport.request(method, path, body, state.token);
     } catch (e) {
+      if (method === "GET" && CACHEABLE.test(path)) {
+        const hit = store.get(cacheKey(path));
+        if (hit) {
+          const { at, data } = JSON.parse(hit);
+          setOffline(at);
+          return data;
+        }
+      }
+      setOffline(state.offlineSince || Date.now());
       throw new ApiErr(0, "Can't reach HatiAlert. Check your connection and try again.");
     }
+    if (state.offlineSince) setOffline(null);
     if (res.type.startsWith("text/csv")) return res.body;
     let data = {};
     try { data = JSON.parse(res.body || "{}"); } catch { /* not JSON */ }
     if (res.status >= 400) {
       if (res.status === 401 && state.token) signOutLocal();
+      if (res.status === 403 && data.field === "pin" && state.user) { state.user.must_change_pin = true; location.hash = "#/new-pin"; }
       throw new ApiErr(res.status, data.error || "Something went wrong.", data.field);
     }
+    if (method === "GET" && CACHEABLE.test(path) && res.body.length < 400_000) store.set(cacheKey(path), JSON.stringify({ at: Date.now(), data }));
     return data;
   }
+  function setOffline(at) {
+    state.offlineSince = at;
+    const bar = $("#offline-bar");
+    if (bar) { bar.hidden = !at; if (at) bar.textContent = `No connection. Showing what was saved at ${new Date(at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}.`; }
+  }
+
+  // -- send-later queue (IndexedDB, so photos fit) -------------------------
+  const queueDb = () => new Promise((ok, fail) => {
+    const r = indexedDB.open("hatialert-client", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("queue", { keyPath: "client_id" });
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => fail(r.error);
+  });
+  const queueTx = async (mode, fn) => {
+    const d = await queueDb();
+    return new Promise((ok, fail) => {
+      const tx = d.transaction("queue", mode), st = tx.objectStore("queue");
+      const req = fn(st);
+      tx.oncomplete = () => ok(req && req.result);
+      tx.onerror = () => fail(tx.error);
+    });
+  };
+  const queue = {
+    async add(item) { try { await queueTx("readwrite", (st) => st.put(item)); return true; } catch { return false; } },
+    async all() { try { return (await queueTx("readonly", (st) => st.getAll())) || []; } catch { return []; } },
+    async remove(id) { try { await queueTx("readwrite", (st) => st.delete(id)); } catch { /* gone */ } },
+  };
+  const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join(""));
+  let flushing = false;
+  async function flushQueue() {
+    if (flushing || !state.user) return;
+    flushing = true;
+    try {
+      for (const item of await queue.all()) {
+        if (item.user_id !== state.user.id) continue;
+        try {
+          const inc = await api("POST", "/api/incidents", item.body);
+          await queue.remove(item.client_id);
+          toast(`Saved report sent: ${inc.ref}`);
+        } catch (err) {
+          if (err.status === 0 || err.status === 401 || err.status === 429 || err.status >= 500) break; // try later
+          await queue.remove(item.client_id); // the server refused it; keep the reason visible
+          toast(`A saved report couldn't be sent: ${err.message}`);
+        }
+      }
+    } finally {
+      flushing = false;
+      const n = (await queue.all()).filter((i) => state.user && i.user_id === state.user.id).length;
+      const box = $("#queue-note");
+      if (box) { box.hidden = !n; const c = $("[data-count]", box); if (c) c.textContent = plural(n, "report"); }
+    }
+  }
+  window.addEventListener("online", flushQueue);
+  setInterval(() => { if (navigator.onLine) flushQueue(); }, 60_000);
+
+  // -- app shell offline (service worker; only on the real server over HTTPS or localhost)
+  if ("serviceWorker" in navigator && !window.HATI_TRANSPORT && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* still works online */ });
+  }
+
+  // -- notifications on this phone while the app is open or in the background
+  const notify = {
+    supported: "Notification" in window,
+    on: () => notify.supported && store.get("hatialert.notify") === "1" && Notification.permission === "granted",
+    seen: new Set(JSON.parse(store.get("hatialert.seenAlerts") || "[]")),
+    async check() {
+      if (!notify.on() || !state.user || state.user.must_change_pin) return;
+      let o;
+      try { o = await api("GET", "/api/overview"); } catch { return; }
+      const w = o.warning;
+      if (!w || notify.seen.has(w.id)) return;
+      notify.seen.add(w.id);
+      store.set("hatialert.seenAlerts", JSON.stringify([...notify.seen].slice(-50)));
+      const title = `${tr("Elephant warning")} · ${o.village.name}`;
+      try {
+        const reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());
+        if (reg) reg.showNotification(title, { body: w.message, tag: "alert-" + w.id, icon: "icon.svg" });
+        else new Notification(title, { body: w.message, tag: "alert-" + w.id });
+      } catch { /* blocked here */ }
+    },
+  };
+  setInterval(() => notify.check(), 60_000);
 
   let toastTimer;
   function toast(msg) {
@@ -195,11 +300,13 @@
           <a class="brand" href="#/home">${MARK}<b>HatiAlert</b></a>
           <div class="who small"><span class="muted">${esc(roleName[state.user.role])}</span><span class="tag me">${icon("pin")}${esc(state.user.village)}</span></div>
         </header>
+        <div id="offline-bar" class="offline-bar" role="status" hidden></div>
         <nav class="tabs" aria-label="Main">
           ${tabs.map(([k, label, href]) => `<a href="${href}" class="${k === "report" ? "report" : ""}" ${k === active ? 'aria-current="page"' : ""}>${icon(k)}<span>${label}</span></a>`).join("")}
         </nav>
         <main id="main" tabindex="-1">${content}</main>
       </div>`;
+    setOffline(state.offlineSince);
     return $("#main");
   }
   const loading = (active) => shell(active, `<p class="muted">Loading…</p>`);
@@ -490,6 +597,7 @@
         <div data-errors></div>
         <button class="btn primary big" type="submit">Sign in</button>
         <p class="small muted">New here? <a href="#/register">Create an account</a></p>
+        <p class="small muted"><a href="#/forgot">Forgot your PIN?</a></p>
       </form>
       ${demo.length ? `<section class="card"><div class="stack"><h2>Try a demo account</h2><p class="small muted">Each role sees a different app. Tap one to fill in the form.</p></div>
         <div class="demo">${demo.map((d) => `<button type="button" data-phone="${esc(d.phone)}" data-pin="${esc(d.pin)}"><b>${esc(roleName[d.role])}</b><span class="mono muted">PIN ${esc(d.pin)}</span><span class="small muted">${esc(d.name)} · ${esc(d.village)}</span><span class="mono small muted">${esc(d.phone)}</span></button>`).join("")}</div></section>` : ""}`);
@@ -513,6 +621,7 @@
       <form class="card" id="reg" novalidate>
         <label class="field" data-field="name"><span>Full name</span><input id="reg-name" type="text" autocomplete="name" maxlength="60" required></label>
         <label class="field" data-field="phone"><span>Mobile number</span><input id="reg-phone" type="tel" inputmode="numeric" autocomplete="tel" required></label>
+        ${state.meta.sms_enabled ? `<div class="field" data-field="code"><span>Code from the text message</span><div class="row"><input id="reg-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="grow"><button type="button" class="btn" id="reg-send">Send code</button></div><small id="reg-code-note">We text a 6-digit code to check the number is yours.</small></div>` : ""}
         <label class="field" data-field="village"><span>Village</span><select id="reg-village">${state.meta.villages.map((v) => `<option>${esc(v.name)}</option>`).join("")}</select></label>
         <div class="grid2">
           <label class="field" data-field="pin"><span>Choose a PIN</span><input id="reg-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"><small>4 to 6 digits</small></label>
@@ -523,23 +632,94 @@
         <p class="small muted">New accounts start as villagers. Forest staff accounts are set up by the forest office.</p>
       </form>`);
     const form = $("#reg", main);
+    const send = $("#reg-send", main);
+    if (send) send.onclick = async () => {
+      try { const r = await api("POST", "/api/auth/otp", { phone: $("#reg-phone").value, purpose: "register" }); $("#reg-code-note").textContent = r.message; $("#reg-code").focus(); }
+      catch (err) { showErrors(form, err); }
+    };
     form.onsubmit = async (e) => {
       e.preventDefault();
       if ($("#reg-pin").value !== $("#reg-pin2").value) return showErrors(form, new ApiErr(400, "The two PINs don't match.", "pin2"));
       try {
-        signIn(await api("POST", "/api/auth/register", { name: $("#reg-name").value, phone: $("#reg-phone").value, village: $("#reg-village").value, pin: $("#reg-pin").value }));
+        signIn(await api("POST", "/api/auth/register", { name: $("#reg-name").value, phone: $("#reg-phone").value, village: $("#reg-village").value, pin: $("#reg-pin").value, code: $("#reg-code")?.value }));
         toast("Account created");
       } catch (err) { showErrors(form, err); }
     };
   }
 
+  function viewForgot() {
+    const sms = state.meta.sms_enabled;
+    const main = authShell(`
+      <div class="pagehead"><a href="#/login" class="small">← Sign in</a><h1>Forgot your PIN?</h1></div>
+      ${sms ? `<form class="card" id="fg" novalidate>
+        <p class="muted">We'll text you a code, then you choose a new PIN.</p>
+        <label class="field" data-field="phone"><span>Mobile number</span><input id="fg-phone" type="tel" inputmode="numeric" autocomplete="tel"></label>
+        <div><button type="button" class="btn" id="fg-send">Send code</button> <small id="fg-note" class="muted"></small></div>
+        <label class="field" data-field="code"><span>Code from the text message</span><input id="fg-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6"></label>
+        <div class="grid2">
+          <label class="field" data-field="pin"><span>New PIN</span><input id="fg-pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"><small>4 to 6 digits</small></label>
+          <label class="field" data-field="pin2"><span>Repeat PIN</span><input id="fg-pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+        </div>
+        <div data-errors></div>
+        <button class="btn primary big" type="submit">Save new PIN</button>
+      </form>` : `<section class="card"><p>Ask a forest officer or forest guard to reset your PIN. They will give you a temporary PIN, and you choose a new one when you sign in.</p>
+        <p class="small muted">Text-message codes aren't set up on this server yet.</p></section>`}`);
+    const form = $("#fg", main);
+    if (!form) return;
+    $("#fg-send", main).onclick = async () => {
+      try { const r = await api("POST", "/api/auth/otp", { phone: $("#fg-phone").value, purpose: "reset" }); $("#fg-note").textContent = r.message; }
+      catch (err) { showErrors(form, err); }
+    };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if ($("#fg-pin").value !== $("#fg-pin2").value) return showErrors(form, new ApiErr(400, "The two PINs don't match.", "pin2"));
+      try { signIn(await api("POST", "/api/auth/reset", { phone: $("#fg-phone").value, code: $("#fg-code").value, pin: $("#fg-pin").value })); toast("New PIN saved"); }
+      catch (err) { showErrors(form, err); }
+    };
+  }
+
+  const pinForm = (id, temp) => `
+    <form class="card" id="${id}" novalidate>
+      <h2>${temp ? "Choose your own PIN" : "Change PIN"}</h2>
+      ${temp ? '<p class="muted">You signed in with a temporary PIN. Choose a new one that only you know.</p>' : ""}
+      <label class="field" data-field="old_pin"><span>${temp ? "Temporary PIN" : "Current PIN"}</span><input id="${id}-old" type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"></label>
+      <div class="grid2">
+        <label class="field" data-field="pin"><span>New PIN</span><input id="${id}-new" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"><small>4 to 6 digits, not 1111 or 1234</small></label>
+        <label class="field" data-field="pin2"><span>Repeat PIN</span><input id="${id}-new2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></label>
+      </div>
+      <div data-errors></div>
+      <div><button class="btn primary" type="submit">Save new PIN</button></div>
+    </form>`;
+  function bindPinForm(root, id, done) {
+    const form = $("#" + id, root);
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      if ($(`#${id}-new`).value !== $(`#${id}-new2`).value) return showErrors(form, new ApiErr(400, "The two PINs don't match.", "pin2"));
+      try {
+        state.user = await api("POST", "/api/me/pin", { old_pin: $(`#${id}-old`).value, pin: $(`#${id}-new`).value });
+        saveMe(state.user);
+        toast("New PIN saved");
+        done();
+      } catch (err) { showErrors(form, err); }
+    };
+  }
+  function viewNewPin() {
+    const main = authShell(`<div class="pagehead"><div class="row">${MARK}<b class="label">HatiAlert</b></div></div>${pinForm("np", true)}
+      <p class="small muted"><button type="button" class="linkbtn" id="np-out">Sign out</button></p>`);
+    bindPinForm(main, "np", () => { location.hash = "#/home"; router(); });
+    $("#np-out", main).onclick = async () => { try { await api("POST", "/api/auth/logout"); } catch { /* ok */ } signOutLocal(); router(); };
+  }
+
   function signIn({ token, user }) {
     state.token = token; state.user = user;
     store.set("hatialert.token", token);
-    location.hash = "#/home";
+    saveMe(user);
+    location.hash = user.must_change_pin ? "#/new-pin" : "#/home";
     router();
+    flushQueue();
   }
   function signOutLocal() {
+    clearCache();
     state.token = null; state.user = null;
     store.set("hatialert.token", null);
     location.hash = "#/login";
@@ -558,11 +738,15 @@
         <h1>${o.nearby.length ? `${plural(o.nearby.length, "open incident")} near you` : "No open incidents near you"}</h1></div>
       ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `<b>${i.km} km ${esc(i.dir)} of ${esc(o.village.name)}</b>`)).join("")}</section>`
         : `<p class="muted">${o.open_total ? `${plural(o.open_total, "open incident")} elsewhere in the district.` : "All quiet across the district."} You'll see new reports here.</p>`}
+      <div class="notice" id="queue-note" hidden><span>Waiting to send: <b data-count></b>. They go automatically when you're back online.</span><button class="btn small" id="flush">Send now</button></div>
       <div class="grid2"><a class="btn primary big" href="#/report">${icon("report")} Report elephants</a><a class="btn big" href="#/report/camera">${icon("camera")} Snap a photo and report</a></div>
       <section class="card flush">${mapBlock({ incidents: open, home: o.village.name, radius: o.radius_km })}</section>
       ${isStaff() ? `<div class="kpis"><div class="kpi"><small>Open in district</small><b>${o.open_total}</b></div><div class="kpi"><small>Waiting for a check</small><b>${o.awaiting_check}</b></div><div class="kpi"><small>Reported in 24 h</small><b>${o.reported_24h}</b></div></div>` : ""}
       ${o.has_sample && state.user.role === "officer" ? `<div class="notice"><span>Sample incidents are loaded so you can try the app.</span><span class="confirm" id="sample"><button class="btn small" data-ask>Remove sample data</button></span></div>` : ""}`;
     mountMaps(main);
+    $("#flush", main).onclick = () => flushQueue();
+    flushQueue();
+    notify.check();
     const sample = $("#sample", main);
     if (sample) {
       sample.onclick = async (e) => {
@@ -879,6 +1063,7 @@
       if (f.lat != null) Object.assign(body, { lat: f.lat, lng: f.lng });
       if (!DAMAGE_TYPES.includes(f.type)) Object.assign(body, { casualties: 0, crop_acres: 0, property_inr: 0 });
       if (f.media.length) body.attachments = f.media.map(({ kind, data }) => ({ kind, data }));
+      body.client_id = f.client_id || (f.client_id = newClientId());
       $("#rep-send").disabled = true;
       $("#rep-send").textContent = f.media.length ? "Sending…" : "Send report";
       try {
@@ -892,7 +1077,17 @@
             <p class="muted">Stay well away from the herd and warn your neighbours.</p>
             <div class="row"><a class="btn primary" href="#/case/${inc.id}">View report</a><a class="btn" href="#/home">Back to home</a></div>
           </section>`;
-      } catch (err) { showErrors(form, err); $("#rep-send").disabled = false; $("#rep-send").textContent = "Send report"; }
+      } catch (err) {
+        if (err.status === 0 && (await queue.add({ client_id: body.client_id, user_id: state.user.id, body, queued_at: Date.now() }))) {
+          main.innerHTML = `<section class="card"><span class="label">Saved on this phone</span>
+            <h1>No connection right now. Your report is saved.</h1>
+            <p>It sends by itself when the phone is back online. You'll get a report number then.</p>
+            <p class="muted">If people are in danger, phone the forest control room or 112 now.</p>
+            <div class="row"><a class="btn primary" href="#/home">Back to home</a><a class="btn" href="#/guide">Emergency numbers</a></div></section>`;
+          return;
+        }
+        showErrors(form, err); $("#rep-send").disabled = false; $("#rep-send").textContent = "Send report";
+      }
     };
     sync();
     renderMedia();
@@ -934,7 +1129,7 @@
     if (i.casualties) facts.push(["People hurt", esc(i.casualties)]);
     if (i.crop_acres) facts.push(["Crops", esc(`${i.crop_acres} acres`)]);
     if (i.property_inr) facts.push(["Property loss", esc(inr(i.property_inr))]);
-    if (i.reporter) facts.push(["Reported by", `${esc(i.reporter.name)}<br><span class="mono small">${esc(i.reporter.phone)}</span>`]);
+    if (i.reporter) facts.push(["Reported by", `${esc(i.reporter.name)}<br><span class="mono small">${esc(i.reporter.phone)}</span>${i.reporter.phone_verified ? "" : '<br><span class="tag">Phone not verified</span>'}`]);
     main.innerHTML = `
       <div class="pagehead"><a class="small" href="#/cases">← ${staff ? "Cases" : "My reports"}</a>
         <div class="row between"><h1>${esc(i.type_label)}</h1>${sevPill(i.severity, i.severity_label)}</div>
@@ -942,6 +1137,7 @@
       <section class="card flush">${mapBlock({ incidents: [i], home: state.user.village, focus: i.id })}</section>
       <section class="card"><dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
         ${i.description ? `<p translate="no">${esc(i.description)}</p>` : ""}</section>
+      ${i.attachments_hidden ? `<p class="small muted">${plural(i.attachments_hidden, "photo or voice note", "photos or voice notes")}, seen only by the reporter and forest staff.</p>` : ""}
       ${i.attachments.length || i.can_attach ? `<section class="card" id="case-media"><h2>Photos and voice notes</h2>
         ${i.attachments.length ? `<div class="thumbs">${mediaTiles(i.attachments, false)}</div>` : '<p class="small muted">None yet.</p>'}
         ${i.can_attach ? `<div class="row"><button type="button" class="btn small" id="case-cam">${icon("camera")} Add photo</button><span id="case-voice"></span></div>` : ""}</section>` : ""}
@@ -1036,12 +1232,13 @@
     form.onsubmit = async (e) => {
       e.preventDefault();
       try {
-        await api("POST", "/api/alerts", {
+        const sent = await api("POST", "/api/alerts", {
           level: $("[data-level][aria-pressed=true]", form).dataset.level,
           villages: $$("[data-v][aria-pressed=true]", form).map((b) => b.dataset.v),
           message: $("#compose-msg").value, incident_id: pre?.incident_id ?? null,
         });
-        toast("Alert sent");
+        const n = sent.sms ? sent.sms.recipients : 0;
+        toast(!n ? "Alert sent" : sent.sms.mode === "manual" ? `Alert sent. ${plural(n, "person", "people")} to text by hand (Admin › Messages)` : `Alert sent. Texting ${plural(n, "person", "people")}`);
         viewAlerts();
       } catch (err) { showErrors(form, err); }
     };
@@ -1133,9 +1330,10 @@
   function viewMore() {
     const u = state.user;
     const main = shell("more", `
-      <div class="pagehead"><h1>${esc(u.name)}</h1><p class="muted">${esc(roleName[u.role])} · <span class="mono">${esc(u.phone)}</span></p></div>
+      <div class="pagehead"><h1>${esc(u.name)}</h1><p class="muted">${esc(roleName[u.role])} · <span class="mono">${esc(u.phone)}</span>${u.phone_verified ? "" : ' · <span class="tag">Phone not verified</span>'}</p></div>
       <section class="card flush divide">
-        ${u.role === "officer" ? `<a class="item" href="#/dashboard"><h3>District overview</h3><span class="muted">→</span><div class="meta">Trends, hotspots, response times, CSV export</div></a>` : ""}
+        ${u.role === "officer" ? `<a class="item" href="#/dashboard"><h3>District overview</h3><span class="muted">→</span><div class="meta">Trends, hotspots, response times, CSV export</div></a>
+        <a class="item" href="#/admin"><h3>Admin</h3><span class="muted">→</span><div class="meta">People, villages, text messages, backups</div></a>` : ""}
         <a class="item" href="#/guide"><h3>Safety and help</h3><span class="muted">→</span><div class="meta">What to do, emergency numbers, compensation</div></a>
       </section>
       <section class="card"><h2 translate="no">${isNag() ? "Bhasa (Language)" : "Language (Bhasa)"}</h2>
@@ -1154,8 +1352,41 @@
         <div data-errors></div>
         <div><button class="btn primary" type="submit">Save</button></div>
       </form>
+      <section class="card"><h2>Alerts</h2>
+        <label class="switch"><input type="checkbox" id="sms-on" ${u.sms_alerts ? "checked" : ""}><span>Text me alerts for ${esc(u.village)}</span></label>
+        <small class="muted">${state.meta.sms_enabled ? "Sent to your mobile number as SMS." : "Forest staff send these by hand until text messages are set up."}</small>
+        ${notify.supported ? `<label class="switch"><input type="checkbox" id="notify-on" ${notify.on() ? "checked" : ""}><span>Show alerts on this phone</span></label>
+        <small class="muted">Works while HatiAlert is open or in the background. It can't wake a closed app, so keep text alerts on.</small>` : ""}
+      </section>
+      ${pinForm("cp", false)}
+      <section class="card"><h2>Signed-in devices</h2>
+        <p class="small muted">Lost a phone, or signed in on someone else's? Sign out everywhere except here.</p>
+        <div class="confirm" id="logout-all"><button class="btn" data-ask>Sign out other devices</button></div>
+      </section>
       <div class="row between"><button class="btn danger" id="out">Sign out</button><span class="small muted">Engine: ${esc(transport.engine)}</span></div>`);
     bindLangPicker(main, "lang-more");
+    bindPinForm(main, "cp", () => viewMore());
+    $("#sms-on", main).onchange = async (e) => {
+      try { state.user = await api("PATCH", "/api/me", { sms_alerts: e.target.checked }); saveMe(state.user); toast(e.target.checked ? "Text alerts on" : "Text alerts off"); }
+      catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+    };
+    const nOn = $("#notify-on", main);
+    if (nOn) nOn.onchange = async () => {
+      if (nOn.checked) {
+        let perm = Notification.permission;
+        try { if (perm === "default") perm = await Notification.requestPermission(); } catch { perm = "denied"; }
+        if (perm !== "granted") { nOn.checked = false; toast("This browser won't show notifications here"); return; }
+      }
+      store.set("hatialert.notify", nOn.checked ? "1" : "0");
+      toast(nOn.checked ? "Alerts will show on this phone" : "Phone alerts off");
+      notify.check();
+    };
+    const la = $("#logout-all", main);
+    la.onclick = async (e) => {
+      if (e.target.matches("[data-ask]")) la.innerHTML = `<span class="small">Sign out every other phone and browser?</span><button class="btn small danger" data-yes>Sign them out</button><button class="btn small" data-no>Cancel</button>`;
+      else if (e.target.matches("[data-no]")) la.innerHTML = `<button class="btn" data-ask>Sign out other devices</button>`;
+      else if (e.target.matches("[data-yes]")) { try { await api("POST", "/api/me/logout-all"); toast("Other devices signed out"); } catch (err) { toast(err.message); } la.innerHTML = `<button class="btn" data-ask>Sign out other devices</button>`; }
+    };
     const opts = $$("[data-skin-key]", main);
     const choose = (b, focus) => {
       store.set("hatialert.theme", b.dataset.skinKey);
@@ -1175,6 +1406,7 @@
       e.preventDefault();
       try {
         state.user = await api("PATCH", "/api/me", { name: $("#prof-name").value, village: $("#prof-village").value, radius_km: +$("#prof-radius").value });
+        saveMe(state.user);
         toast("Saved");
         viewMore();
       } catch (err) { showErrors(form, err); }
@@ -1182,15 +1414,184 @@
     $("#out", main).onclick = async () => { try { await api("POST", "/api/auth/logout"); } catch { /* already signed out */ } signOutLocal(); router(); };
   }
 
+  // -- admin (officers) ----------------------------------------------------
+  const roleOpts = (cur) => ["villager", "guard", "officer"].map((r) => `<option value="${r}" ${r === cur ? "selected" : ""}>${roleName[r]}</option>`).join("");
+  async function viewAdmin(tab = "people") {
+    if (state.user.role !== "officer") { location.hash = "#/home"; return; }
+    const tabs = [["people", "People"], ["villages", "Villages"], ["messages", "Messages"], ["system", "System"]];
+    const main = shell("more", `
+      <div class="pagehead"><a class="small" href="#/more">← More</a><h1>Admin</h1></div>
+      <div class="seg" role="group" aria-label="Admin sections">${tabs.map(([k, l]) => `<a class="segl" href="#/admin/${k}" ${k === tab ? 'aria-current="page"' : ""}>${l}</a>`).join("")}</div>
+      <div id="admin-body" class="stack"><p class="muted">Loading…</p></div>`);
+    const body = $("#admin-body", main);
+    try {
+      if (tab === "villages") await adminVillages(body);
+      else if (tab === "messages") await adminMessages(body);
+      else if (tab === "system") await adminSystem(body);
+      else await adminPeople(body);
+    } catch (err) {
+      body.innerHTML = `<div class="card"><p>${esc(err.status === 404 ? "This needs the Python engine, which isn't running in this browser." : err.message)}</p></div>`;
+    }
+  }
+
+  async function adminPeople(body) {
+    body.innerHTML = `<div class="row"><input type="search" id="pp-q" class="grow" placeholder="Search name or phone" aria-label="Search people"><select id="pp-role" class="narrow" aria-label="Role"><option value="">Everyone</option>${roleOpts("").replace(' selected', "")}</select></div><section class="card flush divide" id="pp-list"></section><div id="pp-temp"></div>`;
+    const list = $("#pp-list", body);
+    const load = async () => {
+      const q = encodeURIComponent($("#pp-q").value.trim()), r = $("#pp-role").value;
+      const people = await api("GET", `/api/users?q=${q}&role=${r}`);
+      list.innerHTML = people.length ? people.map((p) => `
+        <div class="item" data-uid="${p.id}">
+          <h3 translate="no">${esc(p.name)}</h3><span class="tag">${esc(roleName[p.role])}</span>
+          <div class="meta"><span class="mono">${esc(p.phone)}</span><span translate="no">${esc(p.village)}</span>
+            ${p.active ? "" : '<span class="tag">Switched off</span>'}${p.phone_verified ? "" : '<span class="tag">Phone not verified</span>'}
+            ${p.failed_24h ? `<span class="tag">${plural(p.failed_24h, "wrong PIN")} today</span>` : ""}${p.last_seen ? `<span>Last seen ${ago(p.last_seen)}</span>` : ""}</div>
+          <div class="full row pp-actions">
+            <select data-role aria-label="Role">${roleOpts(p.role)}</select><button type="button" class="btn small" data-act="role">Save role</button>
+            <button type="button" class="btn small" data-act="reset">Reset PIN</button>
+            ${p.failed_24h ? '<button type="button" class="btn small" data-act="unlock">Unlock</button>' : ""}
+            <button type="button" class="btn small ${p.active ? "danger" : ""}" data-act="active" data-on="${p.active ? 0 : 1}">${p.active ? "Switch off" : "Switch on"}</button>
+          </div>
+        </div>`).join("") : `<div class="empty"><b>No one found</b></div>`;
+    };
+    let t;
+    $("#pp-q", body).oninput = () => { clearTimeout(t); t = setTimeout(() => load().catch((e) => toast(e.message)), 250); };
+    $("#pp-role", body).onchange = () => load().catch((e) => toast(e.message));
+    list.onclick = async (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      const row = b.closest("[data-uid]"), uid = row.dataset.uid;
+      try {
+        if (b.dataset.act === "role") { await api("PATCH", `/api/users/${uid}`, { role: $("[data-role]", row).value }); toast("Role saved"); }
+        if (b.dataset.act === "active") { await api("PATCH", `/api/users/${uid}`, { active: b.dataset.on === "1" }); toast(b.dataset.on === "1" ? "Account switched on" : "Account switched off"); }
+        if (b.dataset.act === "unlock") { await api("POST", `/api/users/${uid}/unlock`); toast("Unlocked"); }
+        if (b.dataset.act === "reset") {
+          if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Tap again to reset"; return; }
+          const r = await api("POST", `/api/users/${uid}/reset-pin`);
+          $("#pp-temp", body).innerHTML = `<section class="card warning"><span class="label">Temporary PIN for <span translate="no">${esc(r.user.name)}</span></span><p class="bigpin mono">${esc(r.temp_pin)}</p><p class="small">Tell them in person or by phone call. They must choose a new PIN when they sign in. It isn't shown again.</p></section>`;
+          $("#pp-temp", body).scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        await load();
+      } catch (err) { toast(err.message); }
+    };
+    await load();
+  }
+
+  async function adminVillages(body) {
+    const vs = await api("GET", "/api/villages");
+    const unverified = vs.filter((v) => v.active && !v.verified).length;
+    body.innerHTML = `
+      ${unverified ? `<div class="notice"><span>${plural(unverified, "village position is", "village positions are")} not checked yet. Distances and alert areas depend on them.</span></div>` : ""}
+      <section class="card flush divide">${vs.map((v) => `
+        <div class="item" data-vid="${v.id}">
+          <h3 translate="no">${esc(v.name)}</h3>${v.verified ? '<span class="tag me">Checked</span>' : '<span class="tag">Not checked</span>'}
+          <div class="meta"><span class="mono">${v.lat.toFixed(5)}, ${v.lng.toFixed(5)}</span><span translate="no">${esc(v.source || "—")}</span><span>${plural(v.people, "person", "people")}</span><span>${plural(v.incidents, "incident")}</span>${v.active ? "" : '<span class="tag">Hidden</span>'}</div>
+          <details class="full"><summary>Edit</summary>
+            <form class="stack vform" novalidate>
+              <div class="grid2"><label class="field" data-field="lat"><span>Latitude</span><input name="lat" type="text" inputmode="decimal" value="${v.lat}"></label>
+                <label class="field" data-field="lng"><span>Longitude</span><input name="lng" type="text" inputmode="decimal" value="${v.lng}"></label></div>
+              <label class="field" data-field="source"><span>Where the position comes from</span><input name="source" type="text" maxlength="120" value="${esc(v.source)}" placeholder="e.g. Survey of India sheet 83G/1, GPS by guard"></label>
+              <label class="switch"><input type="checkbox" name="verified" ${v.verified ? "checked" : ""}><span>Position checked</span></label>
+              <label class="switch"><input type="checkbox" name="active" ${v.active ? "checked" : ""}><span>Show in lists</span></label>
+              <div data-errors></div><div><button class="btn primary small" type="submit">Save</button></div>
+            </form></details>
+        </div>`).join("")}</section>
+      <form class="card" id="v-add" novalidate><h2>Add a village</h2>
+        <label class="field" data-field="name"><span>Name</span><input name="name" type="text" maxlength="60"></label>
+        <div class="grid2"><label class="field" data-field="lat"><span>Latitude</span><input name="lat" type="text" inputmode="decimal" placeholder="26.0972"></label>
+          <label class="field" data-field="lng"><span>Longitude</span><input name="lng" type="text" inputmode="decimal" placeholder="94.2582"></label></div>
+        <label class="field" data-field="source"><span>Where the position comes from</span><input name="source" type="text" maxlength="120"></label>
+        <label class="switch"><input type="checkbox" name="verified"><span>Position checked</span></label>
+        <div data-errors></div><div><button class="btn primary" type="submit">Add village</button></div></form>
+      <form class="card" id="v-import" novalidate><h2>Import a list</h2>
+        <p class="small muted">Paste CSV with a header row <span class="mono">name,lat,lng,source</span>, or choose a file. Names already on the list get the new position; all imported positions count as checked.</p>
+        <input type="file" id="v-file" accept=".csv,text/csv,text/plain" aria-label="CSV file">
+        <label class="field" data-field="csv"><span>CSV</span><textarea id="v-csv" class="csv" placeholder="name,lat,lng,source&#10;Lotsu,26.2500,94.1000,Census 2011"></textarea></label>
+        <div data-errors></div><div><button class="btn primary" type="submit">Import</button></div><p id="v-result" class="small"></p></form>`;
+    const refreshMeta = async () => { state.meta = await api("GET", "/api/meta"); };
+    $$(".vform", body).forEach((f) => (f.onsubmit = async (e) => {
+      e.preventDefault();
+      const vid = f.closest("[data-vid]").dataset.vid, d = new FormData(f);
+      try {
+        await api("PATCH", `/api/villages/${vid}`, { lat: d.get("lat"), lng: d.get("lng"), source: d.get("source"), verified: !!d.get("verified"), active: !!d.get("active") });
+        await refreshMeta(); toast("Village saved"); adminVillages(body);
+      } catch (err) { showErrors(f, err); }
+    }));
+    $("#v-add", body).onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target, d = new FormData(f);
+      try {
+        await api("POST", "/api/villages", { name: d.get("name"), lat: d.get("lat"), lng: d.get("lng"), source: d.get("source"), verified: !!d.get("verified") });
+        await refreshMeta(); toast("Village added"); adminVillages(body);
+      } catch (err) { showErrors(f, err); }
+    };
+    $("#v-file", body).onchange = async (e) => { const file = e.target.files[0]; if (file) $("#v-csv").value = await file.text(); };
+    $("#v-import", body).onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api("POST", "/api/villages/import", { csv: $("#v-csv").value });
+        await refreshMeta();
+        toast(`Imported: ${r.added} added, ${r.updated} updated`);
+        await adminVillages(body);
+        $("#v-result", body).textContent = r.skipped ? `Skipped ${plural(r.skipped, "line")} with a problem: ${r.skipped_lines.join(", ")}` : "";
+      } catch (err) { showErrors(e.target, err); }
+    };
+  }
+
+  async function adminMessages(body) {
+    const box = await api("GET", "/api/outbox");
+    const label = { queued: "Waiting", sent: "Sent", failed: "Failed", manual: "To send by hand" };
+    body.innerHTML = `
+      <div class="notice"><span>${box.mode === "manual" ? "Text messages aren't connected to an SMS service yet. Send these from a phone, then mark them sent." : "Alerts are texted automatically. Failed ones can be tried again."}</span></div>
+      ${box.batches.length ? box.batches.map((b) => `
+        <section class="card" data-batch="${b.alert_id}">
+          <div class="row between"><h3>${esc(b.level_label)} · <span translate="no">${esc(b.villages.join(", "))}</span></h3><span class="small muted">${ago(b.sent_at)}</span></div>
+          <p class="mono small msgtext" translate="no">${esc(b.text)}</p>
+          <div class="chips">${Object.entries(b.counts).map(([k, n]) => `<span class="tag">${label[k] || k}: ${n}</span>`).join("")}</div>
+          <div class="row"><button type="button" class="btn small" data-copy-text>${icon("copy")} Copy message</button><button type="button" class="btn small" data-copy-nums>${icon("copy")} Copy numbers</button>
+            ${b.counts.manual ? '<button type="button" class="btn small primary" data-mark="sent">Mark all sent</button>' : ""}${b.counts.failed && box.mode !== "manual" ? '<button type="button" class="btn small" data-mark="queued">Try failed again</button>' : ""}</div>
+          <details><summary>${plural(b.recipients.length, "person", "people")}</summary><ul class="plain stack small">${b.recipients.map((r) => `<li class="row between"><span translate="no">${esc(r.name || "—")} · ${esc(r.village || "")}</span><span class="mono">${esc(r.phone)}</span><span class="tag">${label[r.status] || r.status}</span></li>`).join("")}</ul></details>
+        </section>`).join("") : `<div class="empty"><b>No alert messages yet</b><span>Each alert lists the people in those villages here.</span></div>`}`;
+    body.onclick = async (e) => {
+      const card = e.target.closest("[data-batch]");
+      if (!card) return;
+      const b = box.batches.find((x) => String(x.alert_id) === card.dataset.batch);
+      if (e.target.closest("[data-copy-text]")) copy(b.text);
+      if (e.target.closest("[data-copy-nums]")) copy(b.recipients.map((r) => "+91" + r.phone).join(", "));
+      const m = e.target.closest("[data-mark]");
+      if (m) {
+        const want = m.dataset.mark, from = want === "sent" ? "manual" : "failed";
+        try { await api("POST", "/api/outbox/mark", { ids: b.recipients.filter((r) => r.status === from).map((r) => r.id), status: want }); toast(want === "sent" ? "Marked sent" : "Trying again"); adminMessages(body); }
+        catch (err) { toast(err.message); }
+      }
+    };
+  }
+
+  async function adminSystem(body) {
+    const st = await api("GET", "/api/admin/status");
+    const mb = (n) => (n / 1e6).toFixed(1) + " MB";
+    const bk = st.system && st.system.backups;
+    body.innerHTML = `
+      <section class="card"><h2>Text messages</h2><p>${st.sms.enabled ? `Connected (${esc(st.sms.mode)}${st.sms.host ? `, ${esc(st.sms.host)}` : ""}).` : "Not connected. Alerts are listed under Messages for staff to send by hand, and sign-up codes are off."}</p>
+        <div class="chips">${Object.entries(st.outbox).map(([k, n]) => `<span class="tag">${esc(k)}: ${n}</span>`).join("") || '<span class="small muted">No messages yet.</span>'}</div></section>
+      <section class="card"><h2>Backups</h2>${bk && bk.dir ? `<p>Every ${bk.every_hours} h to <span class="mono">${esc(bk.dir)}</span>, keeping ${bk.keep}.</p><p class="small muted">${bk.last_at ? `Last backup ${ago(bk.last_at)}: <span class="mono">${esc(bk.last_path)}</span>` : "First backup is running."}${bk.error ? ` · Last error: ${esc(bk.error)}` : ""}</p>`
+        : `<p>Automatic backups are off.</p><p class="small muted">Start the server with <span class="mono">--backup-dir /path/to/backups</span>, or run <span class="mono">python -m hatialert backup</span> on a schedule.${window.HATI_TRANSPORT ? " In this preview, data stays in this browser only." : ""}</p>`}</section>
+      <section class="card"><h2>Storage</h2><dl class="facts"><div><dt>Database</dt><dd>${mb(st.storage.db_bytes)}</dd></div><div><dt>Photos and voice</dt><dd>${mb(st.storage.media_bytes)}</dd></div><div><dt>People</dt><dd>${st.storage.users}</dd></div><div><dt>Incidents</dt><dd>${st.storage.incidents}</dd></div></dl></section>
+      <section class="card"><h2>Recent admin actions</h2>${st.audit.length ? `<ul class="plain stack small">${st.audit.map((a) => `<li><b>${esc(a.action.replace(/_/g, " "))}</b> <span class="muted">${ago(a.at)}${a.by ? ` · ${esc(a.by)}` : ""}</span><br><span translate="no">${esc(a.detail)}</span></li>`).join("")}</ul>` : '<p class="small muted">Nothing yet.</p>'}</section>`;
+  }
+
   // -- router ------------------------------------------------------------
   async function router() {
     const [, page = "home", arg] = (location.hash || "#/home").split("/");
     if (!state.user) {
       if (page === "register") return viewRegister();
+      if (page === "forgot") return viewForgot();
       return viewLogin();
     }
     window.scrollTo(0, 0);
+    if (state.user.must_change_pin) return viewNewPin();
     switch (page) {
+      case "admin": return viewAdmin(arg);
       case "report": return viewReport(arg);
       case "cases": return viewCases();
       case "case": return viewCase(arg);
@@ -1209,7 +1610,8 @@
       state.meta = await api("GET", "/api/meta");
       state.token = store.get("hatialert.token");
       if (state.token) {
-        try { state.user = await api("GET", "/api/me"); } catch { state.token = null; store.set("hatialert.token", null); }
+        try { state.user = await api("GET", "/api/me"); }
+        catch (err) { if (err.status !== 0) { state.token = null; store.set("hatialert.token", null); } }
       }
     } catch (err) {
       app.innerHTML = `<div class="boot"><div class="stack"><h2>HatiAlert couldn't start</h2><p>${esc(err.message)}</p><div><button class="btn" id="reload">Reload</button></div></div></div>`;

@@ -23,7 +23,7 @@ SECURITY_HEADERS = {
 }
 
 
-def make_handler(app: App):
+def make_handler(app: App, trust_proxy: bool = False):
     class Handler(BaseHTTPRequestHandler):
         server_version = "HatiAlert"
 
@@ -45,7 +45,12 @@ def make_handler(app: App):
             if length > MAX_BODY:
                 return self._send(413, "application/json", '{"error": "Request too large."}')
             body = self.rfile.read(length) if length else b""
-            status, ctype, text = app.handle(self.command, url.path, url.query, body, dict(self.headers))
+            headers = {k: v for k, v in self.headers.items() if k.lower() != "x-hatialert-client"}
+            client = self.client_address[0]
+            if trust_proxy and self.headers.get("X-Forwarded-For"):
+                client = self.headers["X-Forwarded-For"].split(",")[-1].strip()  # the address the proxy saw
+            headers["X-HatiAlert-Client"] = client
+            status, ctype, text = app.handle(self.command, url.path, url.query, body, headers)
             extra = {}
             if ctype.startswith("text/csv"):
                 extra["Content-Disposition"] = 'attachment; filename="hatialert-incidents.csv"'
@@ -59,7 +64,8 @@ def make_handler(app: App):
             ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
             if ctype.startswith("text/") or ctype in ("application/javascript", "image/svg+xml"):
                 ctype += "; charset=utf-8"
-            self._send(200, ctype, target.read_bytes())
+            extra = {"Service-Worker-Allowed": "/"} if target.name == "sw.js" else None
+            self._send(200, ctype, target.read_bytes(), extra)
 
         def _route(self):
             if urlsplit(self.path).path.startswith("/api/"):
@@ -76,8 +82,8 @@ def make_handler(app: App):
     return Handler
 
 
-def serve(app: App, host: str, port: int):
-    httpd = ThreadingHTTPServer((host, port), make_handler(app))
+def serve(app: App, host: str, port: int, trust_proxy: bool = False):
+    httpd = ThreadingHTTPServer((host, port), make_handler(app, trust_proxy))
     print(f"HatiAlert running at http://{host}:{port}  (Ctrl+C to stop)")
     try:
         httpd.serve_forever()

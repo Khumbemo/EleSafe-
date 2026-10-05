@@ -14,6 +14,10 @@ function createFallbackEngine(SEED, opts = {}) {
   const STL = Object.fromEntries(M.statuses.map((s) => [s.key, s.label]));
   const ALL = Object.fromEntries(M.alert_levels.map((a) => [a.key, a.label]));
   const DIRS = M.directions, LIM = M.limits;
+  // limits mirrored from api.py
+  const SESSION_IDLE = 30 * DAY, SESSION_MAX = 180 * DAY, WINDOW = 15 * 60000;
+  const MAX_PAIR = 5, MAX_IP = 30, MAX_PHONE_DAY = 20, IP = "local";
+  const REPORTS_PER_HOUR = { villager: 20, guard: 100, officer: 100 }, ALERTS_PER_HOUR = 30, UPLOAD_PER_DAY = 60000000;
   const R = 6371.0088, rad = (d) => (d * Math.PI) / 180, deg = (r) => (r * 180) / Math.PI;
 
   // -- data, re-based so sample times are relative to now ---------------
@@ -27,7 +31,7 @@ function createFallbackEngine(SEED, opts = {}) {
     attachments: [],
   };
   const nextId = (t) => db[t].reduce((m, r) => Math.max(m, r.id), 0) + 1;
-  const failures = {};
+  const attempts = []; // {phone, ip, at}
 
   class E { constructor(status, message, field = null) { this.status = status; this.message = message; this.field = field; } }
 
@@ -138,6 +142,10 @@ function createFallbackEngine(SEED, opts = {}) {
     }
     return out;
   }
+  function quota(u, adding, now) {
+    if (adding && db.attachments.filter((a) => a.user_id === u.id && a.created_at >= now - DAY).reduce((s, a) => s + a.size, 0) + adding > UPLOAD_PER_DAY)
+      throw new E(413, "You've uploaded a lot of photos and recordings today. Try again tomorrow.", "attachments");
+  }
   const attsOf = (iid) => db.attachments.filter((a) => a.incident_id === iid).sort((a, b) => a.id - b.id);
   function addAttachment(iid, m, uid, at) { db.attachments.push({ id: nextId("attachments"), incident_id: iid, kind: m.kind, mime: m.mime, size: m.size, data: m.data, user_id: uid, created_at: at }); }
   const cell = (v) => (typeof v === "string" && /^[=+\-@\t\r]/.test(v) ? "'" + v : v);
@@ -145,7 +153,22 @@ function createFallbackEngine(SEED, opts = {}) {
   const pyNum = (v) => (Number.isInteger(v) ? v.toFixed(1) : String(v)); // Python prints floats as 1.0
 
   // -- views ------------------------------------------------------------
-  const userView = (u) => ({ id: u.id, name: u.name, phone: u.phone, village: u.village, role: u.role, radius_km: u.radius_km });
+  const userView = (u) => ({ id: u.id, name: u.name, phone: u.phone, village: u.village, role: u.role, radius_km: u.radius_km,
+    phone_verified: !!u.phone_verified, must_change_pin: !!u.must_change_pin, sms_alerts: !!u.sms_alerts });
+  function weakPin(body, key = "pin") {
+    const pin = String(body[key] ?? "");
+    if (!/^\d{4,6}$/.test(pin)) throw new E(400, "Choose a PIN of 4 to 6 digits.", key);
+    if (new Set(pin).size === 1 || "0123456789".includes(pin) || "9876543210".includes(pin)) throw new E(400, "That PIN is too easy to guess. Avoid repeated or running digits.", key);
+    return pin;
+  }
+  function loginBlock(phone, now) {
+    const f = (since, ph, ip) => attempts.filter((a) => a.at >= since && (ph == null || a.phone === ph) && (ip == null || a.ip === ip)).map((a) => a.at);
+    const pair = f(now - WINDOW, phone, IP), net = f(now - WINDOW, null, IP), day = f(now - DAY, phone, null);
+    if (day.length >= MAX_PHONE_DAY) throw new E(429, "Too many wrong PINs for this number today. Ask a forest officer to unlock it.", "pin");
+    for (const [hits, cap] of [[pair, MAX_PAIR], [net, MAX_IP]]) {
+      if (hits.length >= cap) throw new E(429, `Too many wrong PINs. Try again in ${Math.ceil((WINDOW - (now - hits[hits.length - cap])) / 60000)} min.`, "pin");
+    }
+  }
   const userById = (id) => db.users.find((u) => u.id === id) || null;
   const byCreated = (a, b) => b.created_at - a.created_at || b.id - a.id;
   function incView(r, viewer, events) {
@@ -154,7 +177,9 @@ function createFallbackEngine(SEED, opts = {}) {
     for (const k of ["id", "type", "severity", "status", "herd_size", "casualties", "crop_acres", "property_inr", "heading", "village", "lat", "lng", "place", "description", "created_at", "updated_at"]) out[k] = r[k];
     Object.assign(out, { ref: ref(r.id, r.created_at), type_label: TYPES[r.type].label, severity_label: SEVL[r.severity], status_label: STL[r.status], open: OPEN.includes(r.status), sample: !!r.sample, mine });
     out.attachments = attsOf(r.id).map((a) => ({ id: a.id, kind: a.kind, mime: a.mime, size: a.size, created_at: a.created_at }));
-    if (staff || mine) { const u = userById(r.reporter_id); out.reporter = u ? { name: u.name, phone: u.phone } : null; }
+    out.attachments = staff || mine ? out.attachments : [];
+    out.attachments_hidden = staff || mine ? 0 : attsOf(r.id).length;
+    if (staff || mine) { const u = userById(r.reporter_id); out.reporter = u ? { name: u.name, phone: u.phone, phone_verified: !!u.phone_verified } : null; }
     if (events) {
       out.events = events.map((e) => { const u = userById(e.user_id); return { status: e.status, status_label: STL[e.status], note: e.note, at: e.at, by: u && (staff || STAFF.includes(u.role)) ? u.name : null, by_role: u ? u.role : null }; });
       out.can_attach = !!(staff || mine);
@@ -178,7 +203,7 @@ function createFallbackEngine(SEED, opts = {}) {
     db.events.push({ id: nextId("events"), incident_id: iid, status, note, user_id: uid, at });
     const r = getIncident(iid); r.updated_at = at; if (newStatus) r.status = newStatus;
   }
-  function session(u) { const token = "fb-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); db.sessions.push({ token, user_id: u.id }); return { token, user: userView(u) }; }
+  function session(u) { const token = "fb-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2); const at = clock(); db.sessions.push({ token, user_id: u.id, created: at, seen: at }); return { token, user: userView(u) }; }
   function windowRows(q) {
     const days = num(q, "days", "int", 1, 365, 30), since = clock() - days * DAY;
     return [days, db.incidents.filter((i) => i.created_at >= since).sort(byCreated)];
@@ -196,30 +221,41 @@ function createFallbackEngine(SEED, opts = {}) {
     }],
     ["POST", /^\/api\/auth\/login$/, null, (u, b) => {
       const p = phone(b.phone), now = clock();
-      const recent = (failures[p] || []).filter((t) => now - t < 300000);
-      if (recent.length >= 5) throw new E(429, `Too many wrong PINs. Try again in ${Math.floor((300000 - (now - recent[0])) / 60000) + 1} min.`, "pin");
+      loginBlock(p, now);
       const found = db.users.find((x) => x.phone === p);
-      if (!found || String(b.pin ?? "") !== found.pin) { failures[p] = [...recent, now]; throw new E(401, "That phone number and PIN don't match.", "pin"); }
-      delete failures[p];
+      if (!found || String(b.pin || "") !== found.pin) { attempts.push({ phone: p, ip: IP, at: now }); throw new E(401, "That phone number and PIN don't match.", "pin"); }
+      if (!found.active) throw new E(403, "This account is switched off. Contact the forest office.", "phone");
+      for (let k = attempts.length - 1; k >= 0; k--) if (attempts[k].phone === p) attempts.splice(k, 1);
+      db.sessions = db.sessions.filter((x) => now - x.seen <= SESSION_IDLE && now - x.created <= SESSION_MAX);
       return session(found);
     }],
     ["POST", /^\/api\/auth\/register$/, null, (u, b) => {
       const name = text(b, "name", LIM.name, true);
       if (name.length < 2) throw new E(400, "Enter your full name.", "name");
-      const p = phone(b.phone), v = village(b), pin = String(b.pin ?? "");
-      if (!/^\d{4,6}$/.test(pin)) throw new E(400, "Choose a PIN of 4 to 6 digits.", "pin");
+      const p = phone(b.phone), v = village(b), pin = weakPin(b);
       if (db.users.some((x) => x.phone === p)) throw new E(409, "This number is already registered. Sign in instead.", "phone");
-      const nu = { id: nextId("users"), name, phone: p, village: v, role: "villager", radius_km: 5, pin, sample: 0, created_at: clock() };
+      const nu = { id: nextId("users"), name, phone: p, village: v, role: "villager", radius_km: 5, pin, sample: 0, created_at: clock(),
+        phone_verified: 0, must_change_pin: 0, active: 1, sms_alerts: 1 };
       db.users.push(nu);
       return session(nu);
     }],
     ["POST", /^\/api\/auth\/logout$/, "user", (u) => { db.sessions = db.sessions.filter((s) => s.token !== u._token); return { ok: true }; }],
+    ["POST", /^\/api\/me\/logout-all$/, "user", (u) => { db.sessions = db.sessions.filter((s) => s.user_id !== u.id || s.token === u._token); return { ok: true }; }],
+    ["POST", /^\/api\/me\/pin$/, "user", (u, b) => {
+      if (String(b.old_pin || "") !== u.pin) { const now = clock(); loginBlock(u.phone, now); attempts.push({ phone: u.phone, ip: IP, at: now }); throw new E(400, "Your current PIN isn't right.", "old_pin"); }
+      const pin = weakPin(b, "pin");
+      if (pin === u.pin) throw new E(400, "Choose a PIN different from the old one.", "pin");
+      Object.assign(userById(u.id), { pin, must_change_pin: 0 });
+      db.sessions = db.sessions.filter((s) => s.user_id !== u.id || s.token === u._token);
+      return userView(userById(u.id));
+    }],
     ["GET", /^\/api\/me$/, "user", (u) => userView(u)],
     ["PATCH", /^\/api\/me$/, "user", (u, b) => {
       const f = {};
       if ("name" in b) f.name = text(b, "name", LIM.name, true);
       if ("village" in b) f.village = village(b);
       if ("radius_km" in b) f.radius_km = num(b, "radius_km", "float", ...LIM.radius_km);
+      if ("sms_alerts" in b) f.sms_alerts = b.sms_alerts ? 1 : 0;
       Object.assign(userById(u.id), f);
       return userView(userById(u.id));
     }],
@@ -236,6 +272,15 @@ function createFallbackEngine(SEED, opts = {}) {
     }],
     ["GET", /^\/api\/incidents\/(\d+)$/, "user", (u, b, q, id) => { const r = getIncident(id); return incView(r, u, eventsOf(r.id)); }],
     ["POST", /^\/api\/incidents$/, "user", (u, b) => {
+      const cid = b.client_id === undefined ? null : b.client_id;
+      if (cid !== null) {
+        if (typeof cid !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(cid)) throw new E(400, "Bad report id.", "client_id");
+        const dup = db.incidents.find((i) => i.reporter_id === u.id && i.client_id === cid);
+        if (dup) return incView(dup, u, eventsOf(dup.id));
+      }
+      const now0 = clock();
+      if (db.incidents.filter((i) => i.reporter_id === u.id && !i.sample && i.created_at >= now0 - HOUR).length >= REPORTS_PER_HOUR[u.role])
+        throw new E(429, "You've sent a lot of reports in the last hour. Wait a little, or phone the forest office if it's urgent.");
       if (!(b.type in TYPES)) throw new E(400, "Choose what happened.", "type");
       const v = village(b);
       const herd = num(b, "herd_size", "int", ...LIM.herd_size, 1);
@@ -256,8 +301,9 @@ function createFallbackEngine(SEED, opts = {}) {
         heading, village: v, lat, lng, place: text(b, "place", 120), description: text(b, "description", LIM.description),
       };
       const files = mediaList(b.attachments);
-      const at = clock(), id = nextId("incidents");
-      db.incidents.push({ id, ...rec, status: "reported", reporter_id: u.id, sample: 0, created_at: at, updated_at: at });
+      quota(u, files.reduce((s, m) => s + m.size, 0), now0);
+      const at = now0, id = nextId("incidents");
+      db.incidents.push({ id, ...rec, status: "reported", reporter_id: u.id, sample: 0, created_at: at, updated_at: at, client_id: cid });
       db.events.push({ id: nextId("events"), incident_id: id, status: "reported", note: "", user_id: u.id, at });
       for (const m of files) addAttachment(id, m, u.id, at);
       return incView(getIncident(id), u, eventsOf(id));
@@ -268,6 +314,7 @@ function createFallbackEngine(SEED, opts = {}) {
       const have = {};
       for (const a of attsOf(r.id)) have[a.kind] = (have[a.kind] || 0) + 1;
       const m = mediaList([b], have)[0], now = clock();
+      quota(u, m.size, now);
       addAttachment(r.id, m, u.id, now);
       addEvent(r.id, r.status, m.kind === "photo" ? "Added a photo" : "Added a voice note", u.id, now, null);
       return incView(r, u, eventsOf(r.id));
@@ -275,6 +322,8 @@ function createFallbackEngine(SEED, opts = {}) {
     ["GET", /^\/api\/attachments\/(\d+)$/, "user", (u, b, q, id) => {
       const a = db.attachments.find((x) => x.id === +id);
       if (!a) throw new E(404, "That file is no longer available.");
+      const owner = db.incidents.find((i) => i.id === a.incident_id);
+      if (!STAFF.includes(u.role) && owner.reporter_id !== u.id && a.user_id !== u.id) throw new E(403, "Only the reporter and forest staff can see these files.");
       return { id: a.id, kind: a.kind, mime: a.mime, size: a.size, data: a.data };
     }],
     ["PATCH", /^\/api\/incidents\/(\d+)$/, "staff", (u, b, q, id) => {
@@ -301,9 +350,13 @@ function createFallbackEngine(SEED, opts = {}) {
       if (!Array.isArray(vs) || !vs.length || vs.some((v) => !(v in VBY))) throw new E(400, "Pick at least one village.", "villages");
       let iid = b.incident_id ?? null;
       if (iid !== null) iid = getIncident(iid).id;
-      const a = { id: nextId("alerts"), level: b.level, message, villages: M.villages.map((v) => v.name).filter((n) => vs.includes(n)), incident_id: iid, user_id: u.id, sample: 0, sent_at: clock() };
+      const now = clock();
+      if (db.alerts.filter((x) => x.user_id === u.id && !x.sample && x.sent_at >= now - HOUR).length >= ALERTS_PER_HOUR)
+        throw new E(429, "That's a lot of alerts in one hour. Wait a little before sending more.");
+      const a = { id: nextId("alerts"), level: b.level, message, villages: M.villages.map((v) => v.name).filter((n) => vs.includes(n)), incident_id: iid, user_id: u.id, sample: 0, sent_at: now };
       db.alerts.push(a);
-      return alertView(a, u, activeIds());
+      const people = db.users.filter((x) => x.active && x.sms_alerts && a.villages.includes(x.village));
+      return { ...alertView(a, u, activeIds()), sms: { recipients: people.length, mode: "manual" } };
     }],
     ["GET", /^\/api\/overview$/, "user", (u) => {
       const now = clock(), home = VBY[u.village];
@@ -368,8 +421,18 @@ function createFallbackEngine(SEED, opts = {}) {
         pathMatched = true;
         if (m !== method) continue;
         const token = String(auth || "").replace(/^Bearer /, "").trim();
-        const s = token && db.sessions.find((x) => x.token === token);
+        let s = token && db.sessions.find((x) => x.token === token);
+        const nowA = clock();
+        if (s) {
+          const su = userById(s.user_id);
+          if (nowA - s.seen > SESSION_IDLE || nowA - s.created > SESSION_MAX || !su.active) {
+            db.sessions = db.sessions.filter((x) => x !== s);
+            if (level) throw new E(401, su.active ? "Your sign-in has expired. Sign in again." : "This account is switched off. Contact the forest office.");
+            s = null;
+          } else if (nowA - s.seen > 600000) s.seen = nowA;
+        }
         const user = s ? { ...userById(s.user_id), _token: token } : null;
+        if (user && user.must_change_pin && level && !/^\/api\/(me|me\/pin|me\/logout-all|auth\/logout)$/.test(path)) throw new E(403, "Choose a new PIN first.", "pin");
         if (level) {
           if (!user) throw new E(401, "Sign in to continue.");
           if (level === "staff" && !STAFF.includes(user.role)) throw new E(403, "Only forest staff can do this.");

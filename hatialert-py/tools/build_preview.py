@@ -37,7 +37,8 @@ def seed_export():
     store.seed(at=T)
     pins = {a["phone"]: a["pin"] for a in DEMO_ACCOUNTS}
     users = [
-        {**{k: u[k] for k in ("id", "name", "phone", "village", "role", "radius_km", "sample")},
+        {**{k: u[k] for k in ("id", "name", "phone", "village", "role", "radius_km", "sample",
+                             "phone_verified", "must_change_pin", "active", "sms_alerts")},
          "pin": pins[u["phone"]], "created_at": u["created_at"] - T}
         for u in store.all("SELECT * FROM users")
     ]

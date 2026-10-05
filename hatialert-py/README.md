@@ -15,7 +15,12 @@ cd hatialert-py
 python -m hatialert            # http://127.0.0.1:8000
 python -m hatialert --port 9000 --db /path/to/hatialert.db
 python -m hatialert --no-demo  # empty database, no demo accounts
+python -m hatialert --backup-dir /srv/hatialert-backups --backup-hours 24 --keep 14
+python -m hatialert backup --db hatialert.db --backup-dir /srv/hatialert-backups   # one-off, e.g. from cron
 ```
+
+Behind a reverse proxy (needed for HTTPS), add `--trust-proxy` so rate limits
+see each phone's own address.
 
 On first start it creates `hatialert.db` with three demo accounts and a month
 of **sample** incidents (an officer can remove them from the Home screen):
@@ -63,6 +68,32 @@ of **sample** incidents (an officer can remove them from the Home screen):
 - **Themes** (More > Theme): Green follows the phone's light or dark mode;
   White, Dark and Navy blue are fixed. The choice is kept on the device.
   Every text colour pair meets WCAG AA contrast (4.5:1).
+- **Alerts by text message.** Each alert queues one SMS for every person in
+  those villages who has text alerts on. Connect any SMS provider that takes
+  an HTTP POST (settings below); until then officers see the messages under
+  More › Admin › Messages with copy buttons, send them from a phone and mark
+  them sent. Phones can also show alerts while the app is open or in the
+  background.
+- **Works offline.** The app opens without signal (service worker), shows
+  the last saved information, and reports made offline wait on the phone and
+  send themselves when the connection returns (each carries an id, so a
+  resend never creates a duplicate).
+- **Accounts.** Weak PINs (1111, 1234…) are refused. Sign-ins end after 30
+  days unused or 180 days in total; "Sign out other devices" in More. Wrong
+  PINs are limited per number and per network, kept in the database: 5 per
+  15 minutes from one network, 20 per day per number (an officer can
+  unlock), 30 per 15 minutes per network. Forgotten PIN: with SMS set up,
+  a texted code; without it, an officer resets it to a temporary PIN that
+  must be changed at the next sign-in. With SMS set up, sign-up also needs
+  a texted code; without it, new accounts show "Phone not verified".
+- **Admin for officers** (More › Admin): find people, change roles, switch
+  accounts off, reset PINs, unlock; correct village positions, mark them
+  checked with their source, add villages or import an official list as CSV
+  (`name,lat,lng,source`); the SMS outbox; storage, backups and a log of
+  admin actions.
+- **Privacy and limits.** Photos and voice notes are visible only to the
+  reporter and forest staff. Villagers can send 20 reports an hour, staff
+  100; 60 MB of photos and recordings per person per day; 30 alerts an hour.
 - Safety guidance, emergency numbers and compensation steps.
 
 ## Layout
@@ -73,8 +104,10 @@ hatialert/
   security.py   PBKDF2-SHA256 PIN hashing, session tokens
   store.py      SQLite schema, queries, sample data
   api.py        JSON API, independent of HTTP (App.handle)
+  sms.py        SMS sending (any HTTP provider) with retries
+  geo.py        WGS 84 <-> UTM zone 46N
   server.py     http.server front end with security headers
-  web/          index.html, app.css, app.js (no build step)
+  web/          index.html, app.css, app.js, nagamese.js, sw.js (no build step)
 tests/          unittest suite: python -m unittest
 tools/          hosted-preview build (Pyodide) and the JS-fallback parity check
 ```
@@ -82,8 +115,9 @@ tools/          hosted-preview build (Pyodide) and the JS-fallback parity check
 ## Tests
 
 ```sh
-python -m unittest             # 34 tests: rules, geography, UTM vs PROJ, map data, auth, workflow, media, alerts, stats, CSV
-node tools/parity.cjs          # the preview's JS fallback answers 68 requests exactly like api.py
+python -m unittest             # 64 tests: rules, geography, UTM vs PROJ, map data, auth and lockout, sessions,
+                               # PINs and codes, admin, villages, privacy, limits, SMS, backups, migrations, CSV
+node tools/parity.cjs          # the preview's JS fallback answers 97 requests exactly like api.py
 node tools/check_i18n.cjs      # Nagamese patterns are valid; the JS UTM maths matches PROJ
 ```
 
@@ -96,6 +130,22 @@ standard-library zip is embedded in the page. If a browser won't run
 WebAssembly, the page switches to `tools/preview/fallback.js`, a JavaScript
 copy of the API that `tools/parity.cjs` keeps in step with `api.py`. The
 More screen shows which engine is running.
+
+## Text messages (SMS)
+
+Set these before starting the server (any provider with an HTTP API):
+
+| Variable | Meaning |
+|---|---|
+| `HATIALERT_SMS_URL` | provider endpoint that receives a POST |
+| `HATIALERT_SMS_AUTH` | value for the `Authorization` header, if needed |
+| `HATIALERT_SMS_BODY` | JSON template with `{to}` and `{message}`, default `{"to": "{to}", "message": "{message}"}` |
+| `HATIALERT_SMS_PREFIX` | put before the 10-digit number, default `+91` |
+| `HATIALERT_SMS_DEBUG=1` | print messages to the console instead (testing) |
+
+Failed sends are retried after 1, 5, 15 and 60 minutes, then marked failed
+for an officer to retry. Indian bulk SMS needs a DLT-registered sender and
+templates; set those up with your provider.
 
 ## Map data
 
@@ -117,17 +167,22 @@ pyshp and contourpy for the build only):
 - **Village coordinates:** only Wokha Town is checked (GeoNames). The other
   nine come from the original app; they fall inside the district but are
   not verified, and the map draws them as dashed "not verified" points.
-  Replace them with Survey of India, Census or OpenStreetMap points and set
-  `verified` in `hatialert/domain.py`.
+  Correct them in Admin › Villages, or import an official list (Survey of
+  India, Census, OpenStreetMap) as CSV there; the district has many more
+  villages than these ten.
 - **Forest-department phone numbers** are placeholders (marked in the app).
   112, 108 and 100 are the real national numbers.
 - **Compensation amounts** come from the original app. Confirm current
   Nagaland ex-gratia rates.
-- **Sign-in** is phone number + PIN with lockout after 5 wrong tries. There is
-  no SMS verification, and staff roles are set in the database:
-  `UPDATE users SET role = 'guard' WHERE phone = '…';`
+- **Connect an SMS provider** (see above) so alerts reach people whose app is
+  closed and sign-ups prove they own the number. Until then alerts must be
+  texted by hand from Admin › Messages.
+- **Make the first real officer:** register normally, then run
+  `sqlite3 hatialert.db "UPDATE users SET role='officer' WHERE phone='…'"`
+  once; after that, officers manage roles in Admin › People. Start with
+  `--no-demo` (or remove the demo accounts) on a real server.
 - Run it behind HTTPS (for example a reverse proxy) when it's on a network.
   Browsers only allow the live camera and microphone on HTTPS or localhost;
   on plain HTTP the app falls back to the phone's camera and recorder apps.
-- Photos and voice notes are stored inside the SQLite file. Back it up, and
-  remember photos can show people's faces and homes.
+- Photos and voice notes are stored inside the SQLite file, so turn on
+  `--backup-dir` and copy the backups off the machine now and then.
