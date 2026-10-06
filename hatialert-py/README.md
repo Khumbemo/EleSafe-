@@ -109,7 +109,8 @@ hatialert/
   server.py     http.server front end with security headers
   web/          index.html, app.css, app.js, nagamese.js, sw.js (no build step)
 tests/          unittest suite: python -m unittest
-tools/          hosted-preview build (Pyodide) and the JS-fallback parity check
+tools/          map build (map-source/ = downloaded inputs), preview build, parity and i18n checks
+preview/        built preview: the app running in the browser with Pyodide (see preview/README.md)
 ```
 
 ## Tests
@@ -123,6 +124,8 @@ node tools/check_i18n.cjs      # Nagamese patterns are valid; the JS UTM maths m
 
 ## Hosted preview
 
+A built copy is in `preview/`; host that folder on any static web server (for
+example GitHub Pages) to try the app without installing anything.
 `tools/build_preview.py` builds a single page that runs this same `hatialert`
 package in the browser with [Pyodide](https://pyodide.org) on an in-memory
 SQLite database, saved to the viewer's browser (IndexedDB); the
