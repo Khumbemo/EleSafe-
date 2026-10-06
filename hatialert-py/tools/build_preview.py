@@ -2,8 +2,8 @@
 
     python tools/build_preview.py --pyodide path/to/pyodide-package --out build/preview
 
-Writes index.html (body content for the artifact host), test.html (the same
-page as a full document, for local checks) and pyodide/ (runtime files that
+Writes index.html (a complete page for any static host), artifact.html (the
+same page body, for hosts that add their own <head>) and pyodide/ (runtime files that
 are published next to the page). Pyodide's standard-library zip is embedded
 in the page as base64 because the host doesn't serve .zip files. The Python that runs in the page is the
 hatialert package itself, copied in unchanged.
@@ -84,8 +84,10 @@ def main():
     ])
     out = args.out
     (out / "pyodide").mkdir(parents=True, exist_ok=True)
-    (out / "index.html").write_text(body)
-    (out / "test.html").write_text(
+    # index.html: a complete page for any static host (GitHub Pages etc.)
+    # artifact.html: the same page body for hosts that add their own <head>
+    (out / "artifact.html").write_text(body)
+    (out / "index.html").write_text(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head>'
         f"<body>{body}</body></html>"

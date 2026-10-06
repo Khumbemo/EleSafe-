@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT))
 from hatialert import geo  # noqa: E402  (UTM maths shared with the app)
 
 OUT = ROOT / "hatialert" / "web" / "map"
-CACHE = Path(__file__).resolve().parent / ".cache"
+CACHE = Path(__file__).resolve().parent / "map-source"  # downloaded inputs, kept in the repo
 UA = {"User-Agent": "HatiAlert-map-build/1.0"}
 CENSUS = "https://raw.githubusercontent.com/datameet/maps/master/Districts/Census_2011/2011_Dist"
 TILE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
