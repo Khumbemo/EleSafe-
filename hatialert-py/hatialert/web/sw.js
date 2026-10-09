@@ -1,8 +1,10 @@
 /* HatiAlert service worker: keeps the app itself on the phone so it opens
    without a connection. API calls always go to the network; app.js keeps
    its own saved copies and the send-later queue. Bump VERSION on release. */
-const VERSION = "hatialert-v1";
-const SHELL = ["./", "index.html", "app.css", "app.js", "nagamese.js", "icon.svg", "map/layers.json", "map/terrain.webp"];
+const VERSION = "hatialert-v2";
+const FONTS = ["atkinson-hyperlegible-latin-400-normal", "atkinson-hyperlegible-latin-700-normal", "atkinson-hyperlegible-latin-400-italic",
+  "bricolage-grotesque-latin-600-normal", "bricolage-grotesque-latin-700-normal", "ibm-plex-mono-latin-500-normal"].map((f) => `fonts/${f}.woff2`);
+const SHELL = ["./", "index.html", "app.css", "app.js", "nagamese.js", "icon.svg", "map/layers.json", "map/terrain.webp", ...FONTS];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

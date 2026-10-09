@@ -492,6 +492,7 @@ window.HATI_NAGAMESE = {
     ["(\\d+) open incidents? elsewhere in the district\\. You'll see new reports here\\.", "District te dusra jaga {1} ta khula ghotona ase. Notun report ide dikhibo."],
     ["([\\d.]+) km ([NESW]{1,2}) of (.+)", "{3} pora {2} phale {1} km"],
     ["· (\\d+) elephants?", "· {1} ta hati"],
+    ["(\\d+) elephants?", "{1} ta hati"],
     ["(\\d+) min ago", "{1} minute age"],
     ["(\\d+) h ago", "{1} ghonta age"],
     ["(\\d+) days? ago", "{1} din age"],

@@ -29,7 +29,7 @@ const SAMPLES = [
   "2 photos or voice notes, seen only by the reporter and forest staff.", "Alert sent. 3 people to text by hand (Admin › Messages)",
   "Alert sent. Texting 1 person", "Text me alerts for Wozhuro", "2 wrong PINs today", "Last seen 5 min ago", "Temporary PIN for",
   "8 village positions are not checked yet. Distances and alert areas depend on them.", "Imported: 1 added, 1 updated",
-  "Skipped 1 line with a problem: 4", "2 people", "1 incident", "Sent: 1",
+  "Skipped 1 line with a problem: 4", "2 people", "1 incident", "Sent: 1", "6 elephants",
 ];
 const compiled = N.patterns.map(([re, tpl]) => [new RegExp("^" + re + "$"), re]);
 for (const [rx, re] of compiled) if (!SAMPLES.some((t) => rx.test(t))) { console.log("PATTERN MATCHES NO SAMPLE", re); bad++; }

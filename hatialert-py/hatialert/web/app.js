@@ -309,7 +309,7 @@
     setOffline(state.offlineSince);
     return $("#main");
   }
-  const loading = (active) => shell(active, `<p class="muted">Loading…</p>`);
+  const loading = (active) => shell(active, `<div class="skeleton" aria-busy="true" aria-label="Loading…"><span class="skel line short"></span><span class="skel line title"></span><span class="skel block"></span><span class="skel block tall"></span></div>`);
   function failure(main, err) {
     main.innerHTML = `<div class="card"><h2>That didn't load</h2><p class="muted">${esc(err.message)}</p><div><button class="btn" data-retry>Try again</button></div></div>`;
     $("[data-retry]", main).onclick = () => router();
@@ -393,7 +393,7 @@
       <span><i class="vk"></i>Village</span><span><i class="vk unv"></i>Village, position not verified</span>
       ${radius ? `<span><i class="lk ring"></i>Your ${radius} km alert area</span>` : ""}
       <span><i class="lk water"></i>Stream</span><span><i class="lk ct"></i>Contour, 100 m</span><span><i class="lk dist"></i>District boundary</span>
-    </div><p class="attrib" data-attrib></p>`;
+    </div><details class="attrib"><summary>Map sources</summary><p data-attrib></p></details>`;
   }
 
   function mountMaps(root) {
@@ -440,13 +440,14 @@
     let pins = "";
     const pin = (p, inner, cls = "") => `<g class="pin ${cls}" data-x="${f2(X(p))}" data-y="${f2(Y(p))}">${inner}</g>`;
     if (L) {
-      for (const d of L.districts) if (d.name !== "Wokha") pins += pin([d.ce, d.cn], `<text class="dname" text-anchor="middle">${esc(d.name.toUpperCase())}</text>`, "dlabel");
-      for (const c of L.contourLabels) pins += pin([c.e, c.n], `<text class="clabel" text-anchor="middle" y="3">${esc(c.text)}</text>`, "clab");
-      for (const pk of L.peaks) pins += pin([pk.e, pk.n], `<path class="peak" d="M0,-7 L6,4 L-6,4Z"/><text class="plabel" text-anchor="middle" y="17">${esc(pk.name || "")}</text><text class="plabel elev" text-anchor="middle" y="29">${pk.elev.toLocaleString("en-IN")} m</text>`);
+      // data-pri: lower numbers win when labels would overlap
+      for (const d of L.districts) if (d.name !== "Wokha") pins += pin([d.ce, d.cn], `<text class="dname" data-pri="7" text-anchor="middle">${esc(d.name.toUpperCase())}</text>`, "dlabel");
+      for (const c of L.contourLabels) pins += pin([c.e, c.n], `<text class="clabel" data-pri="8" text-anchor="middle" y="3">${esc(c.text)}</text>`, "clab");
+      for (const pk of L.peaks) pins += pin([pk.e, pk.n], `<path class="peak" d="M0,-7 L6,4 L-6,4Z"/><text class="plabel" data-pri="5" text-anchor="middle" y="17">${esc(pk.name || "")}</text><text class="plabel elev" data-pri="6" data-with-prev="1" text-anchor="middle" y="29">${pk.elev.toLocaleString("en-IN")} m</text>`);
     }
     V.forEach((v, k) => {
       const isHome = v.name === home;
-      pins += pin(vp[k], `<circle class="vdot${isHome ? " home" : ""}${v.verified ? "" : " unv"}" r="${isHome ? 6 : 4.5}"/><text class="vlabel${isHome ? " home" : ""}" x="9" y="4">${esc(v.name)}</text><title>${esc(v.name)}: ${esc(v.verified ? v.source : "position not verified")}</title>`, "vpin");
+      pins += pin(vp[k], `<circle class="vdot${isHome ? " home" : ""}${v.verified ? "" : " unv"}" r="${isHome ? 6 : 4.5}"/><text class="vlabel${isHome ? " home" : ""}" data-pri="${isHome ? 0 : v.verified ? 3 : 4}" x="9" y="4">${esc(v.name)}</text><title>${esc(v.name)}: ${esc(v.verified ? v.source : "position not verified")}</title>`, "vpin");
     });
     const dirs = state.meta.directions;
     incidents.forEach((i, k) => {
@@ -466,6 +467,21 @@
 
     // -- view: x, y = top-left corner, w = width, all in km --------------
     const pinEls = $$(".pin", svg).map((g) => ({ g, x: +g.dataset.x, y: +g.dataset.y }));
+    const labels = $$("text[data-pri]", svg).sort((a, b) => a.dataset.pri - b.dataset.pri);
+    const marks = $$(".inc, .vdot, .peak", svg);
+    // Hide a label when it would sit on a marker or a more important label.
+    function declutter() {
+      labels.forEach((t) => t.classList.remove("hidden-label"));
+      const taken = marks.map((m) => m.getBoundingClientRect()).filter((r) => r.width);
+      const hit = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+      for (const t of labels) {
+        const r = t.getBoundingClientRect();
+        if (!r.width) continue; // hidden at this zoom by CSS
+        const orphan = t.dataset.withPrev && t.previousElementSibling && t.previousElementSibling.classList.contains("hidden-label");
+        if (orphan || (t.dataset.pri !== "0" && taken.some((x) => hit(r, x)))) t.classList.add("hidden-label");
+        else taken.push(r);
+      }
+    }
     const gridG = $(".grid", svg);
     let view = null;
     const aspect = () => (frame.clientHeight || 300) / (frame.clientWidth || 400);
@@ -508,6 +524,8 @@
       const sb = $(".scalebar", box);
       $("i", sb).style.width = `${(nice / k).toFixed(0)}px`;
       $("span", sb).textContent = nice < 1 ? `${nice * 1000} m` : `${nice} km`;
+      cancelAnimationFrame(set.raf);
+      set.raf = requestAnimationFrame(declutter);
     }
     const zoomAt = (factor, px, py) => {
       const r = frame.getBoundingClientRect();
@@ -568,11 +586,13 @@
     fit();
   }
 
-  function incidentItem(i, extra = "") {
-    return `<a class="item stripe ${esc(i.severity)}" href="#/case/${i.id}">
-      <h3>${esc(i.type_label)}${i.herd_size ? ` <span class="muted small tnum">· ${plural(i.herd_size, "elephant")}</span>` : ""}</h3>
+  // `where` is plain text, e.g. "1.5 km SW of Wokha Town"; defaults to the village.
+  function incidentItem(i, where = "") {
+    const sub = [i.herd_size ? `<span>${plural(i.herd_size, "elephant")}</span>` : "", `<span>${esc(where || i.village)}</span>`].filter(Boolean).join('<span aria-hidden="true"> · </span>');
+    return `<a class="item inc stripe ${esc(i.severity)}" href="#/case/${i.id}">
+      <div class="inc-main"><h3>${esc(i.type_label)}</h3><p class="inc-sub">${sub}</p></div>
       ${sevPill(i.severity, i.severity_label)}
-      <div class="meta"><span>${extra || esc(i.village)}</span><span>${ago(i.created_at)}</span><span>${esc(i.status_label)}</span><span class="mono">${esc(i.ref)}</span></div>
+      <div class="meta"><span class="status st-${esc(i.status)}">${esc(i.status_label)}</span><span>${ago(i.created_at)}</span><span class="mono ref">${esc(i.ref)}</span></div>
     </a>`;
   }
 
@@ -732,17 +752,18 @@
     try { [o, open] = await Promise.all([api("GET", "/api/overview"), api("GET", "/api/incidents?status=open")]); }
     catch (err) { return failure(main, err); }
     const w = o.warning;
-    main.innerHTML = `
+    main.classList.add("wide");
+    main.innerHTML = `<div class="two-col"><div class="col">
       ${w ? `<a class="warning" href="#/alerts"><span class="label">Elephant warning · ${esc(o.village.name)}</span><p translate="no">${esc(w.message)}</p><span class="small muted">${ago(w.sent_at)}${w.by ? ` · ${esc(w.by)}` : ""}</span></a>` : ""}
       <div class="pagehead"><span class="label">Within ${o.radius_km} km of ${esc(o.village.name)}</span>
         <h1>${o.nearby.length ? `${plural(o.nearby.length, "open incident")} near you` : "No open incidents near you"}</h1></div>
-      ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `<b>${i.km} km ${esc(i.dir)} of ${esc(o.village.name)}</b>`)).join("")}</section>`
+      ${o.nearby.length ? `<section class="card flush divide">${o.nearby.slice(0, 5).map((i) => incidentItem(i, `${i.km} km ${i.dir} of ${o.village.name}`)).join("")}</section>`
         : `<p class="muted">${o.open_total ? `${plural(o.open_total, "open incident")} elsewhere in the district.` : "All quiet across the district."} You'll see new reports here.</p>`}
       <div class="notice" id="queue-note" hidden><span>Waiting to send: <b data-count></b>. They go automatically when you're back online.</span><button class="btn small" id="flush">Send now</button></div>
-      <div class="grid2"><a class="btn primary big" href="#/report">${icon("report")} Report elephants</a><a class="btn big" href="#/report/camera">${icon("camera")} Snap a photo and report</a></div>
-      <section class="card flush">${mapBlock({ incidents: open, home: o.village.name, radius: o.radius_km })}</section>
-      ${isStaff() ? `<div class="kpis"><div class="kpi"><small>Open in district</small><b>${o.open_total}</b></div><div class="kpi"><small>Waiting for a check</small><b>${o.awaiting_check}</b></div><div class="kpi"><small>Reported in 24 h</small><b>${o.reported_24h}</b></div></div>` : ""}
-      ${o.has_sample && state.user.role === "officer" ? `<div class="notice"><span>Sample incidents are loaded so you can try the app.</span><span class="confirm" id="sample"><button class="btn small" data-ask>Remove sample data</button></span></div>` : ""}`;
+      <div class="actions"><a class="action primary" href="#/report">${icon("report")}<span>Report elephants</span></a><a class="action" href="#/report/camera">${icon("camera")}<span>Snap a photo and report</span></a></div>
+      ${isStaff() ? `<div class="kpis three late"><div class="kpi"><small>Open in district</small><b>${o.open_total}</b></div><div class="kpi"><small>Waiting for a check</small><b>${o.awaiting_check}</b></div><div class="kpi"><small>Reported in 24 h</small><b>${o.reported_24h}</b></div></div>` : ""}
+      ${o.has_sample && state.user.role === "officer" ? `<div class="notice late"><span>Sample incidents are loaded so you can try the app.</span><span class="confirm" id="sample"><button class="btn small" data-ask>Remove sample data</button></span></div>` : ""}
+      </div><div class="col sticky-col"><section class="card flush">${mapBlock({ incidents: open, home: o.village.name, radius: o.radius_km })}</section></div></div>`;
     mountMaps(main);
     $("#flush", main).onclick = () => flushQueue();
     flushQueue();
@@ -1130,10 +1151,12 @@
     if (i.crop_acres) facts.push(["Crops", esc(`${i.crop_acres} acres`)]);
     if (i.property_inr) facts.push(["Property loss", esc(inr(i.property_inr))]);
     if (i.reporter) facts.push(["Reported by", `${esc(i.reporter.name)}<br><span class="mono small">${esc(i.reporter.phone)}</span>${i.reporter.phone_verified ? "" : '<br><span class="tag">Phone not verified</span>'}`]);
+    main.classList.add("wide");
     main.innerHTML = `
       <div class="pagehead"><a class="small" href="#/cases">← ${staff ? "Cases" : "My reports"}</a>
         <div class="row between"><h1>${esc(i.type_label)}</h1>${sevPill(i.severity, i.severity_label)}</div>
         <p class="muted"><span class="mono">${esc(i.ref)}</span> · ${esc(i.status_label)}${i.sample ? ' · <span class="tag">Sample</span>' : ""}</p></div>
+      <div class="two-col"><div class="col">
       <section class="card flush">${mapBlock({ incidents: [i], home: state.user.village, focus: i.id })}</section>
       <section class="card"><dl class="facts">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
         ${i.description ? `<p translate="no">${esc(i.description)}</p>` : ""}</section>
@@ -1141,6 +1164,7 @@
       ${i.attachments.length || i.can_attach ? `<section class="card" id="case-media"><h2>Photos and voice notes</h2>
         ${i.attachments.length ? `<div class="thumbs">${mediaTiles(i.attachments, false)}</div>` : '<p class="small muted">None yet.</p>'}
         ${i.can_attach ? `<div class="row"><button type="button" class="btn small" id="case-cam">${icon("camera")} Add photo</button><span id="case-voice"></span></div>` : ""}</section>` : ""}
+      </div><div class="col">
       <section class="card"><h2>What has happened</h2>
         <ol class="timeline">${i.events.map((e, k) => `<li><span class="dot"></span><div><b>${k && e.status === i.events[k - 1].status ? "Update" : esc(e.status_label)}</b> <span class="small muted">${when(e.at)}${e.by ? ` · ${esc(e.by)}` : ""}</span>${e.note ? `<p translate="no">${esc(e.note)}</p>` : ""}</div></li>`).join("")}</ol></section>
       ${staff ? `<form class="card" id="act" novalidate><h2>Staff action</h2>
@@ -1148,7 +1172,8 @@
         <div data-errors></div>
         <div class="row">${i.next.map((s) => `<button type="button" class="btn ${s === "false_report" ? "" : "primary"}" data-status="${s}">${verbs[s]}</button>`).join("")}<button type="button" class="btn" data-status="">Add note only</button></div>
         ${i.open ? `<div class="row between split"><span class="small muted">Tell villages within 5 km.</span><button type="button" class="btn" id="warn">Warn nearby villages</button></div>` : ""}
-      </form>` : ""}`;
+      </form>` : ""}
+      </div></div>`;
     mountMaps(main);
     const mediaBox = $("#case-media", main);
     if (mediaBox) {
@@ -1201,7 +1226,7 @@
     state.prefill = null;
     const m = state.meta, staff = isStaff();
     const compose = staff ? `
-      <details class="card" id="compose-wrap" ${pre ? "open" : ""}><summary><b>Send an alert</b> <span class="small muted">to chosen villages</span></summary>
+      <details class="card compose" id="compose-wrap" ${pre ? "open" : ""}><summary><span class="ic-badge" aria-hidden="true">${ICON_SVG("alerts")}</span><span class="grow"><b>Send an alert</b><br><span class="small muted">to chosen villages</span></span><span class="chev" aria-hidden="true">›</span></summary>
       <form id="compose" class="stack" novalidate>
         <div class="seg" role="group" aria-label="Alert type" data-field="level">${m.alert_levels.map((l) => `<button type="button" data-level="${l.key}" aria-pressed="${(pre?.level || "warning") === l.key}">${esc(l.label)}</button>`).join("")}</div>
         <div class="field" data-field="villages"><span>Villages</span><div class="chips">${m.villages.map((v) => `<button type="button" class="chip" data-v="${esc(v.name)}" aria-pressed="${!!pre?.villages.includes(v.name)}">${esc(v.name)}</button>`).join("")}</div></div>
