@@ -1,0 +1,10 @@
+# The repository root ignores every "android/" folder (Capacitor output);
+# this one is source.
+!android/
+.gradle/
+build/
+local.properties
+.kotlin/
+*.iml
+.idea/
+captures/

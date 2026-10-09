@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- From hatialert-py/hatialert/web/app.css (:root). -->
+    <color name="hati_bg">#FFF3F5F2</color>
+    <color name="hati_accent">#FF1D5A42</color>
+</resources>

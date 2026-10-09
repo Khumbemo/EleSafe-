@@ -1,0 +1,71 @@
+name: HatiAlert JVM and Android
+
+on:
+  push:
+    paths:
+      - "hatialert-jvm/**"
+      - "hatialert-py/hatialert/**"   # the JVM tests run against the Python server and domain code
+      - ".github/workflows/jvm.yml"
+  pull_request:
+    paths:
+      - "hatialert-jvm/**"
+      - "hatialert-py/hatialert/**"
+      - ".github/workflows/jvm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jvm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: hatialert-jvm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The client's integration test starts `python -m hatialert`; core re-runs
+      # tools/gen_python_vectors.py to check the committed fixture is current.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test (core, client incl. Python server integration, android)
+        run: ./gradlew build :android:assembleDebug --stacktrace
+
+      - name: Check the Android app was part of the build
+        run: ls -l android/build/outputs/apk/debug/*.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hatialert-debug-apk
+          path: hatialert-jvm/android/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hatialert-jvm-reports
+          path: |
+            hatialert-jvm/*/build/reports/
+            hatialert-jvm/*/build/test-results/
+          if-no-files-found: ignore
