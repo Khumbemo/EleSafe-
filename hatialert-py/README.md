@@ -60,9 +60,10 @@ of **sample** incidents (an officer can remove them from the Home screen):
   and a true geodesic alert ring. Zoom with the buttons, mouse wheel (click
   the map first), two-finger pinch or the + / − / arrow keys.
 - **Nagamese** (sign-in screen or More > Language): the whole interface,
-  including server messages. The translation in `hatialert/web/nagamese.js`
-  is a draft that still needs a native speaker's review; edit that file to
-  correct it. Text people type is never translated.
+  including server messages. The translation in
+  `web-ts/src/i18n/nagamese.ts` is a draft that still needs a native
+  speaker's review; edit that file and rebuild (see "Browser client" below)
+  to correct it. Text people type is never translated.
 - **District overview** (officers): incidents per day, hotspot villages,
   median response time, losses, CSV export.
 - **Themes** (More > Theme): Green follows the phone's light or dark mode;
@@ -107,7 +108,8 @@ hatialert/
   sms.py        SMS sending (any HTTP provider) with retries
   geo.py        WGS 84 <-> UTM zone 46N
   server.py     http.server front end with security headers
-  web/          index.html, app.css, app.js, nagamese.js, sw.js (no build step)
+  web/          index.html, app.css; app.js, nagamese.js, sw.js are built from web-ts/ (committed)
+web-ts/         TypeScript source of the browser client (see "Browser client")
 tests/          unittest suite: python -m unittest
 tools/          map build (map-source/ = downloaded inputs), preview build, parity and i18n checks
 preview/        built preview: the app running in the browser with Pyodide (see preview/README.md)
@@ -119,8 +121,45 @@ preview/        built preview: the app running in the browser with Pyodide (see 
 python -m unittest             # 64 tests: rules, geography, UTM vs PROJ, map data, auth and lockout, sessions,
                                # PINs and codes, admin, villages, privacy, limits, SMS, backups, migrations, CSV
 node tools/parity.cjs          # the preview's JS fallback answers 97 requests exactly like api.py
-node tools/check_i18n.cjs      # Nagamese patterns are valid; the JS UTM maths matches PROJ
+node tools/check_i18n.cjs      # Nagamese patterns are valid; the browser's UTM maths (web-ts/src/geo.ts) matches PROJ
+cd web-ts && npm run check     # TypeScript type check of the browser client
 ```
+
+## Browser client
+
+The browser client is written in TypeScript in `web-ts/src/` and bundled
+by esbuild into plain scripts in `hatialert/web/`: `app.js`, `nagamese.js`
+(the phrase book; the page loads it before `app.js`, which reads
+`window.HATI_NAGAMESE`) and `sw.js` (the service worker). The built files
+are committed, so running the server never needs Node; edit the TypeScript,
+not the built files, which say so at the top.
+
+```sh
+cd web-ts
+npm ci              # once: TypeScript and esbuild, versions pinned in package.json
+npm run check       # tsc --noEmit, strict (page code and service worker)
+npm run build       # writes ../hatialert/web/app.js, nagamese.js, sw.js
+npm run watch       # rebuild on save
+```
+
+Output is ES2019 classic scripts (no modules, no eval, no inline styles),
+so older Android Chrome runs it and it fits the server's
+Content-Security-Policy. Commit the rebuilt files with the source change,
+and bump `VERSION` in `src/sw.ts` when the app files change so phones
+fetch the new copy.
+
+- `main.ts` starts everything and boots; `router.ts` maps `#/page/arg` to
+  `views/*.ts` (one file per screen).
+- `dom.ts` is the element builder used instead of HTML strings:
+  `h("button", { class: "btn", "data-ask": true }, "Text")` for HTML,
+  `s(...)` for SVG. Text goes in as text nodes, so nothing needs escaping;
+  neighbouring strings join into one text node so the Nagamese translator
+  sees whole phrases.
+- `types.ts` describes the API's JSON (from `hatialert/api.py`), `api.ts`
+  calls it and keeps offline copies, `offline.ts` holds the send-later
+  queue and registers the service worker, `map.ts` and `geo.ts` draw the
+  map, `media.ts` handles photos and voice notes, `i18n/` the Nagamese
+  phrase book and translator, `theme.ts` the colour themes.
 
 ## Hosted preview
 

@@ -1,6 +1,7 @@
-// Checks web/nagamese.js: every pattern compiles, uses only groups it has,
-// and the JS UTM formula in app.js agrees with PROJ reference values.
-// Run: node tools/check_i18n.cjs
+// Checks web/nagamese.js (built from web-ts/src/i18n/nagamese.ts): every
+// pattern compiles, uses only groups it has, and the browser's UTM formula
+// (web-ts/src/geo.ts) agrees with PROJ reference values.
+// Run: node tools/check_i18n.cjs   (Node 22.13+, for its built-in TypeScript type stripping)
 const fs = require("fs");
 const path = require("path");
 const web = path.join(__dirname, "..", "hatialert", "web");
@@ -34,9 +35,10 @@ const SAMPLES = [
 const compiled = N.patterns.map(([re, tpl]) => [new RegExp("^" + re + "$"), re]);
 for (const [rx, re] of compiled) if (!SAMPLES.some((t) => rx.test(t))) { console.log("PATTERN MATCHES NO SAMPLE", re); bad++; }
 for (const [k, v] of Object.entries(N.words)) if (typeof v !== "string" || !v.trim()) { console.log("EMPTY", k); bad++; }
-const src = fs.readFileSync(path.join(web, "app.js"), "utf8");
-const utmSrc = src.slice(src.indexOf("const utmKm = ("), src.indexOf("// Point `km` from"));
-const utmKm = new Function(utmSrc + "; return utmKm;")();
+// geo.ts is plain TypeScript: strip the types, drop `export`, and run it.
+const { stripTypeScriptTypes } = require("module");
+const geoTs = fs.readFileSync(path.join(__dirname, "..", "web-ts", "src", "geo.ts"), "utf8");
+const utmKm = new Function(stripTypeScriptTypes(geoTs).replace(/^export /gm, "") + "\nreturn utmKm;")();
 for (const [[lat, lon], [e, n]] of [[[26.09717, 94.25817], [625817.193, 2887052.62]], [[25.9208, 93.9549], [595630.908, 2867261.356]], [[26.5595, 94.3908], [638530.297, 2938399.207]]]) {
   const [ke, kn] = utmKm(lat, lon);
   if (Math.abs(ke * 1000 - e) > 0.01 || Math.abs(kn * 1000 - n) > 0.01) { console.log("UTM MISMATCH", lat, lon, ke, kn); bad++; }
