@@ -1,7 +1,8 @@
 """WGS 84 ⇄ UTM zone 46N (EPSG:32646), the grid used by the map.
 
 Krüger series to third order in n (Karney 2011), accurate to well under a
-millimetre inside the zone. web/app.js carries the same forward formula.
+millimetre inside the zone. web-ts/src/geo.ts (the browser client) carries
+the same forward formula.
 """
 
 from __future__ import annotations

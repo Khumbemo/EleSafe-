@@ -24,10 +24,6 @@ from hatialert.store import DEMO_ACCOUNTS, Store  # noqa: E402
 
 PY_MODULES = ["__init__.py", "domain.py", "security.py", "store.py", "api.py"]
 PYODIDE_FILES = ["pyodide.asm.mjs", "pyodide.asm.wasm", "pyodide-lock.json"]  # stdlib zip is inlined
-FONTS = (
-    "https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400"
-    "&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@500&display=swap"
-)
 T = 1_800_000_000_000
 
 
@@ -73,7 +69,7 @@ def main():
     body = "\n".join([
         "<title>HatiAlert</title>",
         '<meta name="description" content="Elephant incident reporting for Wokha district, Nagaland">',
-        f'<link rel="stylesheet" href="{FONTS}">',
+
         f"<style>\n{(web / 'app.css').read_text()}\n</style>",
         '<div id="app"></div>',
         f'<script type="text/plain" id="hati-stdlib">{base64.b64encode((args.pyodide / "python_stdlib.zip").read_bytes()).decode()}</script>',
@@ -94,6 +90,7 @@ def main():
     )
     for name in PYODIDE_FILES:
         shutil.copy2(args.pyodide / name, out / "pyodide" / name)
+    shutil.copytree(web / "fonts", out / "fonts", dirs_exist_ok=True)
     (out / "map").mkdir(exist_ok=True)
     for name in ("layers.json", "terrain.webp"):
         shutil.copy2(web / "map" / name, out / "map" / name)

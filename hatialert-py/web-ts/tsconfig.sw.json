@@ -1,0 +1,10 @@
+{
+  // The service worker runs in a worker scope, not a page, so it gets the
+  // WebWorker library instead of DOM.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "WebWorker"]
+  },
+  "include": ["src/sw.ts"],
+  "exclude": []
+}

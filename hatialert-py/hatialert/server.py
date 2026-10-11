@@ -17,8 +17,8 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Permissions-Policy": "camera=(self), microphone=(self), geolocation=(self)",
     "Content-Security-Policy": (
-        "default-src 'self'; style-src 'self' https://fonts.googleapis.com; "
-        "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' data: blob:; frame-ancestors 'none'"
+        "default-src 'self'; style-src 'self'; font-src 'self'; "
+        "img-src 'self' data: blob:; media-src 'self' data: blob:; frame-ancestors 'none'"
     ),
 }
 
