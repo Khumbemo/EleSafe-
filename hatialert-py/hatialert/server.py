@@ -10,6 +10,9 @@ from urllib.parse import urlsplit
 from .api import App
 
 WEB = Path(__file__).with_name("web")
+# Not in every system's MIME table; browsers need these exact types.
+for _type, _ext in (("application/manifest+json", ".webmanifest"), ("font/woff2", ".woff2"), ("image/webp", ".webp")):
+    mimetypes.add_type(_type, _ext)
 MAX_BODY = 20 * 1024 * 1024  # 6 photos + 2 voice notes at their size limits, as base64
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",

@@ -3,10 +3,10 @@
    its own saved copies and the send-later queue. Bump VERSION on release. */
 declare const self: ServiceWorkerGlobalScope;
 
-const VERSION = "hatialert-v3";
+const VERSION = "hatialert-v4";
 const FONTS = ["atkinson-hyperlegible-latin-400-normal", "atkinson-hyperlegible-latin-700-normal", "atkinson-hyperlegible-latin-400-italic",
   "bricolage-grotesque-latin-600-normal", "bricolage-grotesque-latin-700-normal", "ibm-plex-mono-latin-500-normal"].map((f) => `fonts/${f}.woff2`);
-const SHELL = ["./", "index.html", "app.css", "app.js", "nagamese.js", "icon.svg", "map/layers.json", "map/terrain.webp", ...FONTS];
+const SHELL = ["./", "index.html", "app.css", "app.js", "nagamese.js", "icon.svg", "manifest.webmanifest", "icons/icon-192.png", "icons/apple-touch-icon.png", "map/layers.json", "map/terrain.webp", ...FONTS];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

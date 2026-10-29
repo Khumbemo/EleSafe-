@@ -22,6 +22,36 @@ python -m hatialert backup --db hatialert.db --backup-dir /srv/hatialert-backups
 Behind a reverse proxy (needed for HTTPS), add `--trust-proxy` so rate limits
 see each phone's own address.
 
+### On phones and tablets
+
+The web app is built for phones first and adapts to tablets and desktops:
+
+| Screen | Layout |
+|---|---|
+| Phone, portrait | one column, bottom tab bar |
+| Phone, sideways (under 500 px tall) | slim side rail, header scrolls away, map fits the screen height |
+| Tablet, portrait (600-959 px) | one wider column, bottom tab bar |
+| Tablet, landscape / desktop (960 px +) | side navigation; cases and Home go two-column from 1180 px |
+
+On touch screens every button, chip and link has a touch area of at least
+44 x 44 px (Apple's 44 pt; Material's 48 dp is the same size on most phones),
+and content stays clear of notches and the home indicator.
+
+**Install it like an app** ("Add to Home screen" in Chrome on Android, Share >
+Add to Home Screen in Safari on iPhone and iPad). It then opens full screen with
+its own icon and works offline. Phones only offer this, and only allow the
+camera, microphone and location, on a secure address: `https://...` (put the
+server behind a reverse proxy with a certificate, and add `--trust-proxy`) or
+`localhost`. On a plain `http://192.168.x.x` address the app still works in the
+browser, with the phone's own camera app and recorder in place of the live
+camera.
+
+Let other devices on the same Wi-Fi reach the server with
+`python -m hatialert --host 0.0.0.0`, then open `http://<computer's address>:8000`.
+
+The home-screen icons in `hatialert/web/icons/` are rendered from the app mark by
+`node tools/build_icons.cjs` (needs Playwright).
+
 On first start it creates `hatialert.db` with three demo accounts and a month
 of **sample** incidents (an officer can remove them from the Home screen):
 

@@ -2,9 +2,13 @@ package org.hatialert.mobile.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -19,18 +23,23 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import org.hatialert.client.app.AppController
 import org.hatialert.client.app.Screen
 import org.hatialert.mobile.AppViewModel
@@ -51,6 +60,11 @@ fun HatiApp(vm: AppViewModel) {
     val st by vm.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val c = vm.controller
+    val win = rememberWindowLayout()
+    fun go(tab: Tab) {
+        c.navigate(tab.screen)
+        tab.load?.let { vm.act(it) }
+    }
 
     LaunchedEffect(st.message) {
         val m = st.message ?: return@LaunchedEffect
@@ -97,15 +111,12 @@ fun HatiApp(vm: AppViewModel) {
             )
         },
         bottomBar = {
-            if (signedIn) {
+            if (signedIn && !win.rail) {
                 NavigationBar {
                     for (tab in TABS) {
                         NavigationBarItem(
-                            selected = screen == tab.screen || (tab.screen == Screen.Cases && screen is Screen.CaseDetail),
-                            onClick = {
-                                c.navigate(tab.screen)
-                                tab.load?.let { vm.act(it) }
-                            },
+                            selected = isSelected(tab, screen),
+                            onClick = { go(tab) },
                             icon = { Icon(tab.icon, contentDescription = null) },
                             label = { Text(tab.label) },
                         )
@@ -114,18 +125,56 @@ fun HatiApp(vm: AppViewModel) {
             }
         },
         snackbarHost = { SnackbarHost(snackbar) },
+        // safeDrawing also keeps content clear of a camera cut-out and of the
+        // navigation bar when a phone is held sideways.
+        contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (screen) {
-                Screen.SignIn -> SignInScreen(st, vm)
-                Screen.Home -> HomeScreen(st, onOpen = { id -> vm.act { openCase(id) } })
-                Screen.Report -> ReportScreen(st, vm)
-                Screen.Cases -> CasesScreen(st, onOpen = { id -> vm.act { openCase(id) } })
-                is Screen.CaseDetail -> CaseDetailScreen(st, vm)
-                Screen.Alerts -> AlertsScreen(st)
-                Screen.Settings -> SettingsScreen(st, vm)
+        Row(Modifier.fillMaxSize().padding(padding)) {
+            if (signedIn && win.rail) {
+                NavigationRail(windowInsets = WindowInsets(0, 0, 0, 0)) {
+                    for (tab in TABS) {
+                        NavigationRailItem(
+                            selected = isSelected(tab, screen),
+                            onClick = { go(tab) },
+                            icon = { Icon(tab.icon, contentDescription = null) },
+                            label = { Text(tab.label) },
+                        )
+                    }
+                }
             }
-            if (st.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                val openCase: (Long) -> Unit = { id -> vm.act { openCase(id) } }
+                val centred = Modifier.align(Alignment.TopCenter).readable()
+                when {
+                    win.twoPane && (screen == Screen.Cases || screen is Screen.CaseDetail) -> Row(Modifier.fillMaxSize()) {
+                        Box(Modifier.weight(0.42f).fillMaxHeight()) { CasesScreen(st, onOpen = openCase) }
+                        VerticalDivider()
+                        Box(Modifier.weight(0.58f).fillMaxHeight()) {
+                            if (screen is Screen.CaseDetail) {
+                                Box(Modifier.align(Alignment.TopCenter).readable()) { CaseDetailScreen(st, vm) }
+                            } else {
+                                Text("Choose a case to see its details.", modifier = Modifier.align(Alignment.Center).padding(24.dp), color = argb(LocalPalette.current.muted))
+                            }
+                        }
+                    }
+                    screen == Screen.Home -> HomeScreen(st, win, onOpen = openCase)
+                    else -> Box(centred) {
+                        when (screen) {
+                            Screen.SignIn -> SignInScreen(st, vm)
+                            Screen.Report -> ReportScreen(st, vm)
+                            Screen.Cases -> CasesScreen(st, onOpen = openCase)
+                            is Screen.CaseDetail -> CaseDetailScreen(st, vm)
+                            Screen.Alerts -> AlertsScreen(st)
+                            Screen.Settings -> SettingsScreen(st, vm)
+                            Screen.Home -> Unit
+                        }
+                    }
+                }
+                if (st.isBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
         }
     }
 }
+
+private fun isSelected(tab: Tab, screen: Screen): Boolean =
+    screen == tab.screen || (tab.screen == Screen.Cases && screen is Screen.CaseDetail)

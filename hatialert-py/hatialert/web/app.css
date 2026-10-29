@@ -518,3 +518,57 @@ details.attrib p { margin-top: 6px; }
   .two-col .sticky-col > * { order: 2; }
   .two-col .late { order: 3; }
 }
+
+/* ---- Phones and tablets ---- */
+
+/* A card's single column never grows past the card (a file picker or a long
+   CSV placeholder used to push Admin > Villages sideways on 320-360 px phones). */
+.card { grid-template-columns: minmax(0, 1fr); }
+input[type="file"] { width: 100%; }
+
+/* Notched phones held sideways: keep content clear of the cut-out. */
+.topbar { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+/* Touch screens: every control is at least 44 x 44 CSS px (Apple HIG 44 pt;
+   Material 48 dp; WCAG 2.5.5). Text links keep their look but get a larger
+   invisible hit area, so the layout does not move. */
+@media (pointer: coarse) {
+  .btn.small, .chip, .seg button, .seg .segl, .pp-actions select { min-height: 44px; }
+  .seg button, .seg .segl { display: inline-flex; align-items: center; justify-content: center; }
+  .mapctl button { width: 44px; height: 44px; }
+  .brand, .switch { min-height: 44px; }
+  details:not(.compose) > summary { min-height: 44px; padding-block: 10px; box-sizing: border-box; }
+  .chip { min-width: 44px; justify-content: center; }
+  input[type="file"] { min-height: 44px; }
+  .pagehead > a, main p > a, main .item a:not(.btn):not(.item), .linkbtn { position: relative; }
+  .pagehead > a::after, main p > a::after, main .item a:not(.btn):not(.item)::after, .linkbtn::after {
+    content: ""; position: absolute; left: -8px; right: -8px; top: 50%; height: 44px; transform: translateY(-50%);
+  }
+}
+
+/* Phones held sideways (short and wide): the bottom bar and sticky header
+   took ~40 % of a 360 px tall screen. Use a slim side rail instead and let
+   the header scroll away. */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 959px) {
+  .shell { --rail: calc(76px + env(safe-area-inset-left, 0px)); }
+  .shell:has(> .tabs) { padding-left: var(--rail); }
+  .topbar { position: static; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; }
+  .tabs {
+    top: 0; bottom: 0; right: auto; width: var(--rail);
+    grid-template-columns: 1fr; grid-auto-rows: minmax(0, 1fr); border-top: 0; border-right: 1px solid var(--line);
+    padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  .tabs a { height: auto; min-height: 48px; font-size: 0.7rem; }
+  .tabs a.report .ic { width: 40px; height: 26px; }
+  main { max-width: none; padding-left: 20px; padding-bottom: calc(28px + env(safe-area-inset-bottom, 0px)); }
+  .preview { bottom: 10px; }
+  .toast { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  /* the map fits the screen height instead of a 4:3 box taller than it */
+  .mapframe { aspect-ratio: auto; height: calc(100vh - 40px); height: calc(100dvh - 40px); }
+}
+
+/* Tablets in portrait: a little more breathing room at the sides. */
+@media (min-width: 700px) and (max-width: 959px) {
+  main { padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
+}

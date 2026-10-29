@@ -134,6 +134,19 @@ A real deployment should run the server behind HTTPS (see the Python README) and
   `hatialert-py/hatialert/web/app.css`), server address (changing it signs you out), emergency numbers (tap to
   dial; placeholder forest numbers are marked), sign out.
 
+**Phones and tablets.** The layout follows the Material window size classes and changes on rotation, split
+screen and window resizing:
+
+| Window | Navigation | Home | Cases |
+|---|---|---|---|
+| Phone, portrait (under 600 dp wide) | bottom bar | map above the list | list, then the case |
+| Phone sideways (under 480 dp tall) | side rail | map beside the list | list, then the case |
+| Tablet portrait (600-839 dp) | side rail | taller map above the list | list, then the case |
+| Tablet landscape (840 dp +) | side rail | map beside the list | list and case side by side |
+
+Forms and text are capped at 720 dp wide, content keeps clear of camera cut-outs, and the app does not require a
+touchscreen, camera, GPS or phone line, so tablets and Chromebooks can install it.
+
 Not in the app yet (use the web app): registering, changing a PIN, voice notes, viewing photos, sending alerts,
 officer statistics and admin, offline queueing of reports.
 
