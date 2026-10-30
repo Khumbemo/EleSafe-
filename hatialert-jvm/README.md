@@ -196,6 +196,11 @@ pass it. Android's `HttpURLConnection` supports PATCH, and you can also give `Ha
 | `:android` builds with AGP (manifest, resources, dexing, lint) and produces an APK | **no** | yes |
 | App runs on a device or emulator | no | no (install the APK and try it) |
 
+Android lint runs in CI and prints its findings into the build log ("Android lint findings" step); lint
+**errors** fail the build. The warnings left are deliberate for now: newer AndroidX releases and target SDK 36
+need a newer Android Gradle plugin (and compileSdk 36), which should be upgraded together and tested in CI; the
+Gradle 9 deprecation notices in the log also come from inside AGP 8.8.2.
+
 The container this was written in could not reach Google's Maven repository (`dl.google.com`), so neither the
 Android SDK nor AndroidX could be downloaded and the Android module was **not compiled with AGP there**. To catch
 API mistakes anyway, its Kotlin sources were compiled against Robolectric's `android-all` jar for API 35 (the

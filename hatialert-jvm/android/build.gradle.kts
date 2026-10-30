@@ -41,7 +41,8 @@ android {
     lint {
         // The app is compiled only in CI (no SDK in the authoring container), so lint
         // reports instead of failing the build; the report is uploaded as an artifact.
-        abortOnError = false
+        // Lint errors fail the build; warnings are reported in the log.
+        abortOnError = true
         checkReleaseBuilds = true
         htmlReport = true
         // Plain-text copy (build/reports/lint-results-debug.txt) that CI prints into its log.
@@ -71,6 +72,7 @@ dependencies {
     implementation(libs.androidx.compose.icons)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.kotlinx.coroutines.android)
 }
