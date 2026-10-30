@@ -153,7 +153,15 @@ python -m unittest             # 64 tests: rules, geography, UTM vs PROJ, map da
 node tools/parity.cjs          # the preview's JS fallback answers 97 requests exactly like api.py
 node tools/check_i18n.cjs      # Nagamese patterns are valid; the browser's UTM maths (web-ts/src/geo.ts) matches PROJ
 cd web-ts && npm run check     # TypeScript type check of the browser client
+cd web-ts && npm run test:browser   # real browser against fresh servers (needs `npx playwright install chromium` once):
+                               #   e2e (19 steps), fixes (9: admin, PIN reset, offline send-later, SMS codes),
+                               #   media live + file picker (10 each), layout (no sideways scroll, 44 px touch
+                               #   targets) at 7 phone, tablet and laptop sizes
 ```
+
+All of these run on GitHub for every push that touches `hatialert-py/`
+(`.github/workflows/web.yml`), together with a check that the committed
+`hatialert/web/*.js` match the TypeScript source.
 
 ## Browser client
 

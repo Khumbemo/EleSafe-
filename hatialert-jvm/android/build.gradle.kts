@@ -44,6 +44,10 @@ android {
         abortOnError = false
         checkReleaseBuilds = true
         htmlReport = true
+        // Also print every finding into the build log, so CI shows them without
+        // downloading the report.
+        textReport = true
+        textOutput = file("stdout")
     }
 
     packaging {

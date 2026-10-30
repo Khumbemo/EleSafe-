@@ -6,10 +6,12 @@
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.sw.json",
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch"
+    "watch": "node build.mjs --watch",
+    "test:browser": "node ../tests/browser/run.cjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",
+    "playwright": "1.56.1",
     "typescript": "6.0.3"
   }
 }
