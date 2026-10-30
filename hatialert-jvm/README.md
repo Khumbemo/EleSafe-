@@ -25,10 +25,11 @@ hatialert-jvm/
   client/
     src/main/kotlin/org/hatialert/client/      HatiClient, Models, Http (transport), Errors
     src/main/kotlin/org/hatialert/client/app/  AppController (state + actions), ReportDraft, nearbyIncidents,
-                                               MapScene/Viewport, ThemeChoice/Palettes
+                                               MapScene/Viewport, ThemeChoice/Palettes,
+                                               Outbox (PendingReport, OutboxStore, FileOutboxStore)
     src/test/kotlin/...                        unit tests + PythonServerIntegrationTest
   android/
-    src/main/java/org/hatialert/mobile/        MainActivity, AppViewModel, PrefsSettingsStore, Gps, Photos
+    src/main/java/org/hatialert/mobile/        MainActivity, AppViewModel, PrefsSettingsStore, TokenCipher, Gps, Photos
     src/main/java/org/hatialert/mobile/ui/     one file per screen, MapCanvas, Theme
     src/main/res/xml/network_security_config.xml   release cleartext policy
     src/debug/res/xml/network_security_config.xml  debug cleartext policy
@@ -59,7 +60,10 @@ reported as skipped, not failed.
   distances and directions worked out on the phone match the server's, files a report with a photo, resends it
   (same case comes back), has the guard verify and respond and the officer resolve, checks that a villager and a
   guard are refused the moves they may not make, signs out and checks the old token is refused. It then runs the
-  same flow through `AppController`, the layer the Android app uses.
+  same flow through `AppController`, the layer the Android app uses. Last, it stops the server, files a report
+  through `AppController` (saved to a `FileOutboxStore` on disk), starts the server again on the same database,
+  lets the app send the saved report and checks that exactly one incident (with its photo) was made, also when
+  the same saved report is sent a second time.
 - **`FixtureFreshnessTest`** (core) re-runs `tools/gen_python_vectors.py` and fails if the output no longer
   matches the committed `core/src/test/resources/python-vectors.json`, so a change to the Python rules can't
   silently drift from the port. After an intended change on the Python side, regenerate the fixture:
@@ -116,7 +120,11 @@ A real deployment should run the server behind HTTPS (see the Python README) and
 ### What the app does
 
 - **Sign in** with phone and PIN; the session token is sent as `Authorization: Bearer <token>`, like the web
-  app, and kept in the app's private storage (backups are switched off).
+  app. It is kept in the app's private storage (backups are switched off) **encrypted** with AES-256/GCM under a
+  key held in the Android Keystore (`TokenCipher`, alias `hatialert_token`; no extra library). A plain token
+  saved by an earlier version is encrypted on first launch. If the token can't be decrypted (the key is gone,
+  e.g. app data restored onto another phone) the app treats you as signed out; if the Keystore can't encrypt at
+  all, the token is kept in memory only and you sign in again next launch.
 - **Home:** an active warning for your village, open incidents within your alert radius with distance and
   compass direction (worked out on the phone with `core`, identical to the server's), and a native Canvas map on
   the UTM zone 46N km grid with villages (hollow when not verified), incidents by severity, the geodesic alert
@@ -126,6 +134,18 @@ A real deployment should run the server behind HTTPS (see the Python README) and
   notes, and up to 6 photos from the phone's camera app (shrunk to 1600 px JPEG under 1.5 MB). The severity the
   server will assign is shown before sending; the form uses the server's own validation messages. Each draft
   carries a client id, so a resend after a dropped connection can't create a duplicate.
+- **Send later (no signal):** as in the web app, a report that can't reach the server at all (no network,
+  server down, timeout) is saved on the phone with its photos ("Your report is saved on this phone and will be
+  sent when you're back online."), the form is cleared, and Home and Report show "N reports waiting to send"
+  with a **Send now** button. Saved reports are sent oldest first on launch, on sign-in, on refreshing Home
+  and whenever Android reports a network again (`ConnectivityManager.registerDefaultNetworkCallback`). Each
+  keeps its `client_id`, so the server returns the first copy instead of making a second case if an earlier
+  attempt did get through. Sending stops at the first report that can't get through (no connection, 5xx, 429,
+  expired sign-in) and keeps the rest; a report the server refuses outright (another 4xx) is removed and the
+  reason shown. A report the server refuses when first sent (a validation error) is not saved: the form stays
+  as it was so you can fix it. Saved reports belong to the account that wrote them and wait across sign-outs.
+  Storage: `filesDir/outbox/outbox.json` plus one file per photo, each written to a temporary file and renamed
+  into place (`FileOutboxStore`, in `client`, so it is unit-tested on the JVM).
 - **Cases:** villagers see their own reports, forest staff see every case. **Case detail** shows the facts,
   reporter (staff only), and the timeline; guards and officers get the status moves they are allowed
   (verify, team responded, false report; only officers resolve) and can add notes.
@@ -148,7 +168,7 @@ Forms and text are capped at 720 dp wide, content keeps clear of camera cut-outs
 touchscreen, camera, GPS or phone line, so tablets and Chromebooks can install it.
 
 Not in the app yet (use the web app): registering, changing a PIN, voice notes, viewing photos, sending alerts,
-officer statistics and admin, offline queueing of reports.
+officer statistics and admin.
 
 ## Using the client from Kotlin
 

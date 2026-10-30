@@ -48,7 +48,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Build and test (core, client incl. Python server integration, android)
-        run: ./gradlew build :android:assembleDebug --stacktrace
+        run: ./gradlew build :android:assembleDebug --stacktrace --warning-mode all
 
       - name: Check the Android app was part of the build
         run: ls -l android/build/outputs/apk/debug/*.apk

@@ -109,6 +109,7 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
     }
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        st.pendingNote?.let { note -> PendingNote(note) { vm.act { flushOutbox() } } }
         Text("What happened?", style = MaterialTheme.typography.titleMedium)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (t in IncidentType.entries) {
@@ -225,6 +226,7 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
         Button(onClick = { vm.act { submitReport() } }, enabled = !st.isBusy, modifier = Modifier.fillMaxWidth()) {
             Text("Send report")
         }
+        Text("No signal? Send anyway: the report is kept on this phone and goes out when you're back online.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
         Text("In danger now? Move away first, then call 112.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
     }
 }

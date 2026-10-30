@@ -1,11 +1,14 @@
 package org.hatialert.client.app
 
+import java.io.IOException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.hatialert.client.Alert
 import org.hatialert.client.ApiException
@@ -73,8 +76,14 @@ data class AppState(
     val fieldErrors: Map<String, String> = emptyMap(),
     val busy: Int = 0,
     val message: UiMessage? = null,
+    /** This user's reports saved on the phone, waiting for a connection. */
+    val pendingReports: Int = 0,
 ) {
     val isBusy get() = busy > 0
+
+    /** "2 reports waiting to send", or null when nothing is waiting. */
+    val pendingNote: String?
+        get() = if (pendingReports == 0) null else "$pendingReports report${if (pendingReports == 1) "" else "s"} waiting to send"
 
     /** The server's villages once loaded, else the built-in list. */
     val villages: List<Village>
@@ -94,6 +103,9 @@ class AppController(
     private val store: SettingsStore,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val transport: HttpTransport? = null,
+    /** Reports waiting for a connection (a [FileOutboxStore] on Android). */
+    private val outbox: OutboxStore = MemoryOutboxStore(),
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val _state = MutableStateFlow(AppState(settings = store.load()))
     val state: StateFlow<AppState> = _state.asStateFlow()
@@ -169,7 +181,7 @@ class AppController(
         }
         val me = call { client.me() } ?: return
         _state.update { it.copy(user = me, screen = Screen.Home) }
-        refreshHome()
+        refreshHome() // also sends any saved reports
     }
 
     suspend fun signIn(phone: String, pin: String): Boolean {
@@ -207,6 +219,7 @@ class AppController(
         saveSettings { it.copy(token = null) }
         client.token = null
         _state.update { AppState(settings = it.settings, meta = it.meta, screen = Screen.SignIn, message = message) }
+        // Saved reports stay on the phone for when this person signs in again.
     }
 
     suspend fun loadMeta() {
@@ -214,7 +227,9 @@ class AppController(
         _state.update { it.copy(meta = meta) }
     }
 
+    /** Sends saved reports first, so a report that just went out shows on the map. */
     suspend fun refreshHome() {
+        flushOutbox()
         val ov = call { client.overview() } ?: return
         val nearby = nearbyIncidents(ov.village, ov.radiusKm, ov.nearby)
         _state.update { it.copy(overview = ov, nearby = nearby) }
@@ -250,7 +265,25 @@ class AppController(
             _state.update { it.copy(fieldErrors = errors, message = UiMessage(errors.values.first(), true)) }
             return null
         }
-        val inc = call(fieldErrors = true) { client.createIncident(st.draft.toRequest()) } ?: return null
+        val request = st.draft.toRequest()
+        val inc = try {
+            call(fieldErrors = true, rethrowNetwork = true) { client.createIncident(request) }
+        } catch (e: NetworkException) {
+            // No answer at all: keep it on the phone and send it later (same client_id, so a
+            // report the server did get before the connection dropped is not made twice).
+            val user = st.user
+            if (user != null && enqueue(PendingReport.of(request, st.draft.photos, user.id, clock()))) {
+                _state.update {
+                    it.copy(
+                        draft = ReportDraft(village = it.user?.village), screen = Screen.Home, fieldErrors = emptyMap(),
+                        message = UiMessage(SAVED_OFFLINE, false),
+                    )
+                }
+            } else {
+                _state.update { it.copy(message = UiMessage(e.message ?: "No connection.", true)) }
+            }
+            null
+        } ?: return null
         _state.update {
             it.copy(
                 draft = ReportDraft(village = it.user?.village), detail = inc, screen = Screen.CaseDetail(inc.id),
@@ -265,8 +298,109 @@ class AppController(
         _state.update { it.copy(alerts = list) }
     }
 
+    // --- reports saved while offline ---------------------------------------------
+
+    private val outboxLock = Mutex()
+    private val flushing = Mutex()
+
+    private suspend fun enqueue(item: PendingReport): Boolean = try {
+        outboxLock.withLock {
+            withContext(io) { outbox.save(outbox.load().filter { it.clientId != item.clientId } + item) }
+        }
+        updatePendingCount()
+        true
+    } catch (e: IOException) { // disk full, storage gone: tell the person instead of losing the report silently
+        false
+    } catch (e: SecurityException) {
+        false
+    }
+
+    private suspend fun removeFromOutbox(clientId: String) {
+        outboxLock.withLock { withContext(io) { outbox.save(outbox.load().filter { it.clientId != clientId }) } }
+    }
+
+    private suspend fun pendingForUser(): List<PendingReport> {
+        val id = _state.value.user?.id ?: return emptyList()
+        return outboxLock.withLock { withContext(io) { outbox.load() } }.filter { it.userId == id }
+    }
+
+    /** Re-reads how many of this user's reports are waiting (AppState.pendingReports). */
+    suspend fun updatePendingCount() {
+        val n = try {
+            pendingForUser().size
+        } catch (e: IOException) {
+            0
+        }
+        _state.update { it.copy(pendingReports = n) }
+    }
+
+    /**
+     * Sends this user's saved reports, oldest first (offline.ts flushQueue). Each one
+     * leaves the queue when the server accepts it, or when the server refuses it for
+     * good (a 4xx about the report itself), with the reason shown. It stops at the
+     * first one that can't get through (no connection, server error, too many
+     * reports, signed out) and keeps it and the rest for later. Does nothing while a
+     * flush is already running. Returns how many reports were sent.
+     */
+    suspend fun flushOutbox(): Int {
+        if (!flushing.tryLock()) return 0
+        var sent = 0
+        try {
+            val items = pendingForUser()
+            val refs = mutableListOf<String>()
+            val refused = mutableListOf<String>()
+            for (item in items) {
+                try {
+                    val inc = withContext(io) { client.createIncident(item.toRequest()) }
+                    removeFromOutbox(item.clientId)
+                    refs += inc.ref
+                    sent++
+                } catch (e: NetworkException) {
+                    break
+                } catch (e: ApiException) {
+                    when {
+                        e.isUnauthorized -> {
+                            if (_state.value.user != null) signedOut(UiMessage(e.message ?: "Sign in again.", true))
+                            break
+                        }
+                        e.status < 400 -> { // accepted, but the answer couldn't be read
+                            removeFromOutbox(item.clientId)
+                            sent++
+                        }
+                        e.status == 408 || e.status == 429 || e.status >= 500 -> break // try later
+                        else -> { // the server refused this report itself; resending won't help
+                            removeFromOutbox(item.clientId)
+                            refused += e.message ?: "refused by the server"
+                        }
+                    }
+                }
+            }
+            val sentText = when (refs.size) {
+                0 -> null
+                1 -> "Saved report sent. Your report number is ${refs[0]}."
+                else -> "${refs.size} saved reports sent: ${refs.joinToString()}."
+            }
+            val message = when {
+                refused.isNotEmpty() -> UiMessage(
+                    (if (refused.size == 1) "A saved report couldn't be sent: ${refused[0]}" else "${refused.size} saved reports couldn't be sent: ${refused.joinToString(" / ")}") +
+                        (sentText?.let { " $it" } ?: ""),
+                    true,
+                )
+                sentText != null -> UiMessage(sentText, false)
+                else -> null
+            }
+            if (message != null) _state.update { it.copy(message = message) }
+        } catch (e: IOException) {
+            // The store failed; what was not removed is sent again next time (same client_id, no duplicate).
+        } finally {
+            flushing.unlock()
+            updatePendingCount()
+        }
+        return sent
+    }
+
     /** Runs a blocking client call on [io]; failures become a message instead of an exception. */
-    private suspend fun <T> call(fieldErrors: Boolean = false, quiet: Boolean = false, block: () -> T): T? {
+    private suspend fun <T> call(fieldErrors: Boolean = false, quiet: Boolean = false, rethrowNetwork: Boolean = false, block: () -> T): T? {
         _state.update { it.copy(busy = it.busy + 1) }
         try {
             return withContext(io) { block() }
@@ -282,10 +416,16 @@ class AppController(
                 }
             }
         } catch (e: NetworkException) {
+            if (rethrowNetwork) throw e
             if (!quiet) _state.update { it.copy(message = UiMessage(e.message ?: "No connection.", true)) }
         } finally {
             _state.update { it.copy(busy = it.busy - 1) }
         }
         return null
+    }
+
+    companion object {
+        /** What the web app says when a report is kept for later. */
+        const val SAVED_OFFLINE = "No connection right now. Your report is saved on this phone and will be sent when you're back online."
     }
 }

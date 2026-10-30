@@ -12,6 +12,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.hatialert.client.app.AppController
+import org.hatialert.client.app.FileOutboxStore
 import org.hatialert.client.app.MemorySettingsStore
 import org.hatialert.client.app.Screen
 import org.hatialert.client.app.Settings
@@ -42,6 +43,8 @@ class PythonServerIntegrationTest {
     private var server: Process? = null
     private lateinit var base: String
     private lateinit var dir: File
+    private lateinit var python: String
+    private var port = 0
     private var reportId = 0L
 
     private val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte()) + ByteArray(60)
@@ -50,15 +53,21 @@ class PythonServerIntegrationTest {
     fun startServer() {
         val pyDir = File(System.getProperty("hatialert.py.dir", "../../hatialert-py"))
         assumeTrue(File(pyDir, "hatialert/__main__.py").isFile, "hatialert-py not found at $pyDir")
-        val python = findPython()
-        assumeTrue(python != null, "Python 3.10+ not found; skipping the server integration test")
+        val py = findPython()
+        assumeTrue(py != null, "Python 3.10+ not found; skipping the server integration test")
+        python = py!!
         dir = Files.createTempDirectory("hatialert-it").toFile()
-        val port = ServerSocket(0).use { it.localPort }
+        port = ServerSocket(0).use { it.localPort }
         base = "http://127.0.0.1:$port"
+        launch(pyDir)
+    }
+
+    /** Starts the server on [port] with the same database and waits until it answers. */
+    private fun launch(pyDir: File = File(System.getProperty("hatialert.py.dir", "../../hatialert-py"))) {
         server = ProcessBuilder(python, "-m", "hatialert", "--db", File(dir, "hatialert.db").path, "--host", "127.0.0.1", "--port", "$port")
             .directory(pyDir)
             .redirectErrorStream(true)
-            .redirectOutput(File(dir, "server.log"))
+            .redirectOutput(ProcessBuilder.Redirect.appendTo(File(dir, "server.log")))
             .start()
         val probe = HatiClient(base, UrlConnectionTransport(connectTimeoutMs = 500, readTimeoutMs = 2000))
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
@@ -74,12 +83,17 @@ class PythonServerIntegrationTest {
         }
     }
 
-    @AfterAll
-    fun stopServer() {
+    private fun stop() {
         server?.let {
             it.destroy()
-            if (!it.waitFor(10, TimeUnit.SECONDS)) it.destroyForcibly()
+            if (!it.waitFor(10, TimeUnit.SECONDS)) it.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
         }
+        server = null
+    }
+
+    @AfterAll
+    fun stopServer() {
+        stop()
         if (::dir.isInitialized) dir.deleteRecursively()
     }
 
@@ -202,6 +216,48 @@ class PythonServerIntegrationTest {
         app.signOut()
         assertEquals(Screen.SignIn, app.state.value.screen)
         assertEquals(null, store.load().token)
+    }
+
+    @Test
+    @Order(6)
+    fun reportSavedWhileServerIsDownIsSentOnceWhenItIsBack() = runBlocking {
+        val outbox = FileOutboxStore(File(dir, "outbox"))
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO, outbox = outbox)
+        assertTrue(app.signIn("9000000001", "1111"), app.state.value.message?.text ?: "")
+        val marker = "Offline queue check ${System.nanoTime()}"
+        app.editDraft {
+            it.copy(type = IncidentType.CROP_RAID, herdSize = "2", village = "Wozhuro", offsetKm = "0.3", offsetDir = "W", description = marker, photos = listOf(jpeg))
+        }
+        val clientId = app.state.value.draft.clientId
+
+        stop() // the phone loses the server
+        assertEquals(null, app.submitReport())
+        assertEquals(AppController.SAVED_OFFLINE, app.state.value.message?.text)
+        assertEquals(1, app.state.value.pendingReports)
+        assertEquals(0, app.flushOutbox(), "still down: nothing sent, nothing lost")
+        assertEquals(listOf(clientId), outbox.load().map { it.clientId })
+
+        launch() // back online, same database
+        app.refreshHome() // flushes, as on start, sign-in and when the network returns
+        assertEquals(0, app.state.value.pendingReports, app.state.value.message?.text)
+        assertEquals(emptyList(), outbox.load())
+        assertTrue(app.state.value.message!!.text.startsWith("Saved report sent. Your report number is HA-"), app.state.value.message!!.text)
+
+        val vil = client()
+        vil.login("9000000001", "1111")
+        val made = vil.incidents(status = "all", mine = true).filter { it.description == marker }
+        assertEquals(1, made.size, "exactly one incident")
+        assertEquals(listOf("image/jpeg"), vil.incident(made[0].id).attachments.map { it.mime })
+
+        // The answer lost on the way back: the same queued report sent again is the same case.
+        val again = org.hatialert.client.app.PendingReport.of(
+            NewIncident(type = "crop_raid", village = "Wozhuro", herdSize = 2, offsetKm = 0.3, offsetDir = "W", description = marker, clientId = clientId),
+            listOf(jpeg), vil.me().id,
+        )
+        outbox.save(listOf(again))
+        assertEquals(1, app.flushOutbox())
+        assertEquals(1, vil.incidents(status = "all", mine = true).count { it.description == marker }, "client_id de-duplicated the resend")
+        app.signOut()
     }
 
     companion object {

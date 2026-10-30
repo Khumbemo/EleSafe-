@@ -4,13 +4,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -53,6 +60,21 @@ fun DirectionChips(selected: String, none: String, onSelect: (String) -> Unit) {
 fun FieldError(errors: Map<String, String>, vararg keys: String) {
     val msg = keys.firstNotNullOfOrNull { errors[it] } ?: return
     Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+}
+
+/** "2 reports waiting to send" with a button to try now (the web app's queue note). */
+@Composable
+fun PendingNote(text: String, onSendNow: () -> Unit) {
+    val p = LocalPalette.current
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = argb(p.medSoft))) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(text, color = argb(p.ink), fontWeight = FontWeight.Bold)
+                Text("Saved on this phone. They send by themselves when you're back online.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+            }
+            TextButton(onClick = onSendNow) { Text("Send now") }
+        }
+    }
 }
 
 /** IST time as the web app shows it ("2026-10-01 14:05 IST"). */
