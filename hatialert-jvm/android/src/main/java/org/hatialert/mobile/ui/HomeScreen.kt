@@ -3,11 +3,15 @@ package org.hatialert.mobile.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -25,7 +29,7 @@ import org.hatialert.client.app.NearbyItem
 import org.hatialert.client.app.fmtKm
 
 @Composable
-fun HomeScreen(st: AppState, onOpen: (Long) -> Unit) {
+fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit) {
     val ov = st.overview
     val p = LocalPalette.current
     val home = st.homeVillage
@@ -33,45 +37,65 @@ fun HomeScreen(st: AppState, onOpen: (Long) -> Unit) {
     val scene = remember(st.villages, st.nearby, home, radius) {
         MapScene.build(st.villages, st.nearby.map { it.incident }, home, radius)
     }
+    val caption = "UTM zone 46N grid (km). Dashed ring: your ${fmtKm(radius)} km alert area. Hollow dots: village position not verified."
+
+    if (win.mapBeside) {
+        // Tablets and phones held sideways: map on the left at full height, list on the right.
+        Row(Modifier.fillMaxSize().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Card(Modifier.weight(1.1f).fillMaxHeight()) {
+                MapCanvas(scene, onIncident = onOpen, modifier = Modifier.fillMaxWidth().weight(1f))
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(8.dp))
+            }
+            LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                homeItems(st, radius, onOpen)
+            }
+        }
+        return
+    }
     LazyColumn(
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ov?.warning?.let { w ->
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = argb(p.critSoft))) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(w.levelLabel, color = argb(p.crit), fontWeight = FontWeight.Bold)
-                        Text(w.message, color = argb(p.ink))
-                        Text("${w.villages.joinToString()} · ${istTime(w.sentAt)}", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
-                    }
+        homeItems(st, radius, onOpen, map = {
+            Card {
+                MapCanvas(scene, onIncident = onOpen, modifier = Modifier.fillMaxWidth().height(win.mapHeightDp.dp))
+                Text(caption, style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(8.dp))
+            }
+        })
+    }
+}
+
+/** Warning, summary, (map), incident rows and the sample-data note, in that order. */
+private fun LazyListScope.homeItems(st: AppState, radius: Double, onOpen: (Long) -> Unit, map: (@Composable () -> Unit)? = null) {
+    val ov = st.overview
+    val home = st.homeVillage
+    ov?.warning?.let { w ->
+        item {
+            val p = LocalPalette.current
+            Card(colors = CardDefaults.cardColors(containerColor = argb(p.critSoft))) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(w.levelLabel, color = argb(p.crit), fontWeight = FontWeight.Bold)
+                    Text(w.message, color = argb(p.ink))
+                    Text("${w.villages.joinToString()} · ${istTime(w.sentAt)}", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
                 }
             }
         }
-        item {
-            Text(
-                if (ov == null) "Loading..." else
-                    "${st.nearby.size} open incident${if (st.nearby.size == 1) "" else "s"} within ${fmtKm(radius)} km of ${home?.name ?: "your village"}" +
-                        " · ${ov.openTotal} open in the district",
-                style = MaterialTheme.typography.titleSmall,
-            )
-        }
-        item {
-            Card {
-                MapCanvas(scene, onIncident = onOpen, modifier = Modifier.fillMaxWidth().height(300.dp))
-                Text(
-                    "UTM zone 46N grid (km). Dashed ring: your ${fmtKm(radius)} km alert area. Hollow dots: village position not verified.",
-                    style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(8.dp),
-                )
-            }
-        }
-        if (ov != null && st.nearby.isEmpty()) {
-            item { Text("No open incidents near you. Stay alert and report anything you see.", color = argb(p.muted)) }
-        }
-        items(st.nearby, key = { it.incident.id }) { n -> NearbyRow(n, onOpen) }
-        if (ov?.hasSample == true) {
-            item { Text("Some incidents are sample data from the demo server.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
-        }
+    }
+    item {
+        Text(
+            if (ov == null) "Loading..." else
+                "${st.nearby.size} open incident${if (st.nearby.size == 1) "" else "s"} within ${fmtKm(radius)} km of ${home?.name ?: "your village"}" +
+                    " · ${ov.openTotal} open in the district",
+            style = MaterialTheme.typography.titleSmall,
+        )
+    }
+    if (map != null) item { map() }
+    if (ov != null && st.nearby.isEmpty()) {
+        item { Text("No open incidents near you. Stay alert and report anything you see.", color = argb(LocalPalette.current.muted)) }
+    }
+    items(st.nearby, key = { it.incident.id }) { n -> NearbyRow(n, onOpen) }
+    if (ov?.hasSample == true) {
+        item { Text("Some incidents are sample data from the demo server.", style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted)) }
     }
 }
 
