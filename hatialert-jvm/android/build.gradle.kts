@@ -44,10 +44,8 @@ android {
         abortOnError = false
         checkReleaseBuilds = true
         htmlReport = true
-        // Also print every finding into the build log, so CI shows them without
-        // downloading the report.
+        // Plain-text copy (build/reports/lint-results-debug.txt) that CI prints into its log.
         textReport = true
-        textOutput = file("stdout")
     }
 
     packaging {

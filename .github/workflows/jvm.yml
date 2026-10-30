@@ -50,6 +50,10 @@ jobs:
       - name: Build and test (core, client incl. Python server integration, android)
         run: ./gradlew build :android:assembleDebug --stacktrace --warning-mode all
 
+      - name: Android lint findings
+        if: always()
+        run: cat android/build/reports/lint-results-debug.txt || echo "No lint report"
+
       - name: Check the Android app was part of the build
         run: ls -l android/build/outputs/apk/debug/*.apk
 
