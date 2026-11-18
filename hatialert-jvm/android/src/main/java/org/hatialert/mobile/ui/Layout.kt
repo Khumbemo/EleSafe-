@@ -4,7 +4,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 
 /**
@@ -28,11 +29,17 @@ data class WindowLayout(val widthDp: Int, val heightDp: Int) {
     }
 }
 
-/** Recomputed on rotation, split screen and window resizing (the configuration changes). */
+/**
+ * The size of the app's own window (not the whole screen), so split screen and
+ * freeform windows get the layout that fits them. Recomputed when it changes:
+ * rotation, split screen, window resizing.
+ */
 @Composable
 fun rememberWindowLayout(): WindowLayout {
-    val c = LocalConfiguration.current
-    return WindowLayout(c.screenWidthDp, c.screenHeightDp)
+    val size = LocalWindowInfo.current.containerSize // pixels
+    return with(LocalDensity.current) {
+        WindowLayout(size.width.toDp().value.toInt(), size.height.toDp().value.toInt())
+    }
 }
 
 /** Fills the space it is given, but no wider than [WindowLayout.READABLE]. */
