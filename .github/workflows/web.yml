@@ -1,0 +1,86 @@
+name: HatiAlert server and web app
+
+on:
+  push:
+    paths:
+      - "hatialert-py/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "hatialert-py/**"
+      - ".github/workflows/web.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python tests (${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]   # oldest supported (README) and current
+    defaults:
+      run:
+        working-directory: hatialert-py
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests (standard library only, no installs)
+        run: python -m unittest discover -s tests -v
+
+  web:
+    name: TypeScript, build, translations and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hatialert-py
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"   # check_i18n.cjs needs 22.13+ (module.stripTypeScriptTypes)
+          cache: npm
+          cache-dependency-path: hatialert-py/web-ts/package-lock.json
+
+      - name: Install web build tools
+        working-directory: hatialert-py/web-ts
+        run: npm ci
+
+      - name: Type-check
+        working-directory: hatialert-py/web-ts
+        run: npm run check
+
+      - name: Built files match the TypeScript source
+        working-directory: hatialert-py/web-ts
+        run: |
+          npm run build
+          git diff --exit-code -- ../hatialert/web/app.js ../hatialert/web/nagamese.js ../hatialert/web/sw.js \
+            || { echo "::error::hatialert/web/*.js are out of date. Run 'npm run build' in hatialert-py/web-ts and commit the result."; exit 1; }
+
+      - name: Nagamese phrases and map projection
+        run: node tools/check_i18n.cjs
+
+      - name: Preview's JavaScript engine matches the Python API
+        run: node tools/parity.cjs
+
+      - name: Install Chromium for the browser tests
+        working-directory: hatialert-py/web-ts
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser tests (sign-in, reports, media, offline, SMS codes, phone/tablet/laptop layout)
+        working-directory: hatialert-py/web-ts
+        run: npm run test:browser

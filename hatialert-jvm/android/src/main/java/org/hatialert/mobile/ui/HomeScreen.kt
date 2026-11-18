@@ -29,7 +29,7 @@ import org.hatialert.client.app.NearbyItem
 import org.hatialert.client.app.fmtKm
 
 @Composable
-fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit) {
+fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit, onSendNow: () -> Unit) {
     val ov = st.overview
     val p = LocalPalette.current
     val home = st.homeVillage
@@ -47,7 +47,7 @@ fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit) {
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(8.dp))
             }
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                homeItems(st, radius, onOpen)
+                homeItems(st, radius, onOpen, onSendNow)
             }
         }
         return
@@ -56,7 +56,7 @@ fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        homeItems(st, radius, onOpen, map = {
+        homeItems(st, radius, onOpen, onSendNow, map = {
             Card {
                 MapCanvas(scene, onIncident = onOpen, modifier = Modifier.fillMaxWidth().height(win.mapHeightDp.dp))
                 Text(caption, style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(8.dp))
@@ -65,10 +65,11 @@ fun HomeScreen(st: AppState, win: WindowLayout, onOpen: (Long) -> Unit) {
     }
 }
 
-/** Warning, summary, (map), incident rows and the sample-data note, in that order. */
-private fun LazyListScope.homeItems(st: AppState, radius: Double, onOpen: (Long) -> Unit, map: (@Composable () -> Unit)? = null) {
+/** Saved reports, warning, summary, (map), incident rows and the sample-data note, in that order. */
+private fun LazyListScope.homeItems(st: AppState, radius: Double, onOpen: (Long) -> Unit, onSendNow: () -> Unit, map: (@Composable () -> Unit)? = null) {
     val ov = st.overview
     val home = st.homeVillage
+    st.pendingNote?.let { note -> item { PendingNote(note, onSendNow) } }
     ov?.warning?.let { w ->
         item {
             val p = LocalPalette.current

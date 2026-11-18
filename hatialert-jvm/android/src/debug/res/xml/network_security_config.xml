@@ -6,6 +6,7 @@
   local addresses can't be listed one by one. Release builds use
   src/main/res/xml/network_security_config.xml (emulator and localhost only).
 -->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- Deliberate, debug builds only (see the comment above). -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
 </network-security-config>

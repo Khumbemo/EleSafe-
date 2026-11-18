@@ -157,7 +157,7 @@ fun HatiApp(vm: AppViewModel) {
                             }
                         }
                     }
-                    screen == Screen.Home -> HomeScreen(st, win, onOpen = openCase)
+                    screen == Screen.Home -> HomeScreen(st, win, onOpen = openCase, onSendNow = { vm.act { flushOutbox() } })
                     else -> Box(centred) {
                         when (screen) {
                             Screen.SignIn -> SignInScreen(st, vm)

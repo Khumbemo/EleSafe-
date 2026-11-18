@@ -1,0 +1,41 @@
+name: Original React app
+
+# The React/Firebase app in the repository root (the first version of HatiAlert).
+on:
+  push:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "vite.config.js"
+      - ".github/workflows/react.yml"
+  pull_request:
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "vite.config.js"
+      - ".github/workflows/react.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Dependency audit (runtime dependencies, high and critical)
+        run: npm audit --omit=dev --audit-level=high
