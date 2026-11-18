@@ -1,10 +1,22 @@
-node_modules
-dist-ssr
-*.local
+# Dependencies and build output
+node_modules/
+build/
+.gradle/
+__pycache__/
+*.pyc
+
+# Local settings and secrets
 .env
 .env.*
-!.env.example
-.vercel
-.netlify
-android/
-ios/
+local.properties
+*.local
+
+# Databases and backups created by running the server locally
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
