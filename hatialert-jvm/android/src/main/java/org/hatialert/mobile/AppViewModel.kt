@@ -60,6 +60,5 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             callbackRegistered = false
         }
-        super.onCleared()
     }
 }
