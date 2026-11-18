@@ -83,7 +83,7 @@ class OutboxTest {
         assertNull(app.submitReport())
         val s = app.state.value
         assertEquals(AppController.SAVED_OFFLINE, s.message!!.text)
-        assertFalse(s.message!!.isError)
+        assertFalse(s.message.isError)
         assertEquals(Screen.Home, s.screen)
         assertNull(s.draft.type, "draft cleared")
         assertTrue(s.draft.clientId != cid, "the next report gets a new id")
@@ -133,7 +133,7 @@ class OutboxTest {
         val s = app.state.value
         assertEquals(0, s.pendingReports)
         assertEquals("3 saved reports sent: HA-2609-0100, HA-2609-0101, HA-2609-0102.", s.message!!.text)
-        assertFalse(s.message!!.isError)
+        assertFalse(s.message.isError)
         assertEquals(0, app.flushOutbox(), "nothing left for this user")
     }
 

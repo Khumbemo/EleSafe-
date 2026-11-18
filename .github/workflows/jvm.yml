@@ -43,7 +43,12 @@ jobs:
 
       - uses: android-actions/setup-android@v4
         with:
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+          # The platform for compileSdk is installed by the Android Gradle plugin itself
+          # (licences are accepted by this step), so its package name lives in one place.
+          packages: "platform-tools build-tools;36.0.0"
+
+      - name: Android platforms available
+        run: sdkmanager --list 2>/dev/null | grep -oE "platforms;android-[0-9][^ |]*" | sort -uV | tail -8
 
       - uses: gradle/actions/setup-gradle@v6
 

@@ -7,14 +7,14 @@ the Python server in [`../hatialert-py`](../hatialert-py), which stays the refer
 |---|---|---|
 | `core` | Java 17, no dependencies | Pure domain logic ported from `domain.py` and `geo.py`: incident types, severity rules, statuses and who may move them, media limits and type sniffing, haversine, bearing, compass points, destination point, IST report numbers `HA-yymm-NNNN`, seed villages (with verified/source flags), emergency contacts, UTM zone 46N forward and inverse. |
 | `client` | Kotlin/JVM | Typed client for the JSON API (`HatiClient`), plus the app's state layer (`AppController`, report form rules, map projection, themes). Uses `HttpURLConnection` and kotlinx.serialization, so it runs unchanged on Android. |
-| `android` | Kotlin, Jetpack Compose, Material 3 | The phone app (minSdk 24, compileSdk/targetSdk 35). A thin layer over `client`: sign in, home with nearby incidents and a native map, report, cases and case detail, alerts, settings. |
+| `android` | Kotlin, Jetpack Compose, Material 3 | The phone app (minSdk 24, compileSdk 37, targetSdk 36). A thin layer over `client`: sign in, home with nearby incidents and a native map, report, cases and case detail, alerts, settings. |
 
 ```
 hatialert-jvm/
   settings.gradle.kts        includes :android only when an Android SDK is configured
   build.gradle.kts           Kotlin plugins, loaded once for all modules
   gradle/libs.versions.toml  every version pin
-  gradlew, gradle/wrapper/   Gradle 8.14.3 wrapper (checksum-pinned)
+  gradlew, gradle/wrapper/   Gradle 9.6.0 wrapper (checksum-pinned)
   tools/gen_python_vectors.py  runs the Python code to produce the cross-check fixture
   core/
     src/main/java/org/hatialert/core/   Severity, Status, Role, IncidentType, AlertLevel, MediaKind, Limits,
@@ -192,18 +192,26 @@ pass it. Android's `HttpURLConnection` supports PATCH, and you can also give `Ha
 | `core` compiles (`--release 17`, `-Werror`) and its tests pass | yes | yes |
 | Java port matches Python numbers and tables | yes | yes |
 | `client` compiles (warnings are errors) and its tests pass, including the live Python server | yes | yes |
-| Android Kotlin sources type-check against the Android API 35 framework and Compose 1.7 / Material 3 1.3 | yes, in a throwaway harness (see below) | yes, with the real toolchain |
+| Android Kotlin sources compile | not since the AGP 9 upgrade (see below) | yes, with the real toolchain |
 | `:android` builds with AGP (manifest, resources, dexing, lint) and produces an APK | **no** | yes |
 | App runs on a device or emulator | no | no (install the APK and try it) |
 
 Android lint runs in CI and prints its findings into the build log ("Android lint findings" step); lint
-**errors** fail the build. The warnings left are deliberate for now: newer AndroidX releases and target SDK 36
-need a newer Android Gradle plugin (and compileSdk 36), which should be upgraded together and tested in CI; the
-Gradle 9 deprecation notices in the log also come from inside AGP 8.8.2.
+**errors** fail the build.
+
+**Android SDK levels.** The app is compiled against API 37 (needed by the current AndroidX/Compose releases) but
+targets API 36 (Android 16), the newest stable release whose behaviour changes are documented. The app already
+meets them: it draws edge-to-edge, handles back with Compose's `BackHandler` (works with predictive back; no
+`onBackPressed` overrides), and does not lock orientation or resizability. Move `targetSdk` to 37 once Android 17
+is final and the app has been tried on it; lint will flag it until then.
+
+**AGP 9 notes.** AGP 9 compiles Kotlin itself ("built-in Kotlin"), so the module no longer applies
+`org.jetbrains.kotlin.android`; the JVM target follows `compileOptions.targetCompatibility` (17). The Compose
+compiler plugin (`org.jetbrains.kotlin.plugin.compose`) is still applied.
 
 The container this was written in could not reach Google's Maven repository (`dl.google.com`), so neither the
-Android SDK nor AndroidX could be downloaded and the Android module was **not compiled with AGP there**. To catch
-API mistakes anyway, its Kotlin sources were compiled against Robolectric's `android-all` jar for API 35 (the
+Android SDK nor AndroidX could be downloaded and the Android module was **not compiled with AGP there**; CI is
+the only full build. Before the AGP 9 upgrade, its Kotlin sources were also compiled against Robolectric's `android-all` jar for API 35 (the
 real framework classes), JetBrains' Compose Multiplatform 1.7.3 desktop artifacts (the same Compose 1.7 and
 Material 3 1.3 API as the pinned Compose BOM 2025.02.00), and hand-written stubs for the few AndroidX entry
 points that exist only on Google's Maven (`ComponentActivity`, `setContent`, `viewModels`, `enableEdgeToEdge`,
@@ -234,7 +242,8 @@ The port follows `domain.py` and `geo.py` line by line; the fixture shows UTM wi
 
 ## Versions
 
-Kotlin 2.1.10, kotlinx-serialization 1.8.0, kotlinx-coroutines 1.10.1, JUnit 5.11.4, Android Gradle plugin 8.8.2,
-Compose BOM 2025.02.00, activity-compose 1.10.0, lifecycle 2.8.7, core-ktx 1.15.0, Gradle 8.14.3. All are in
+Kotlin 2.4.21, kotlinx-serialization 1.13.0, kotlinx-coroutines 1.11.0, JUnit 5.11.4, Android Gradle plugin 9.5.1,
+Compose BOM 2026.09.00, activity-compose 1.13.0, lifecycle 2.11.0, core-ktx 1.19.1, exifinterface 1.4.2,
+Gradle 9.6.0. All are in
 `gradle/libs.versions.toml`. The AndroidX and AGP versions could not be resolved in the authoring container; CI is
 the first place they are downloaded.

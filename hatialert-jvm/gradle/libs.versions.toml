@@ -1,15 +1,16 @@
 [versions]
-# Kotlin 2.1.x pairs with kotlinx-serialization 1.8 / coroutines 1.10 and AGP 8.8.
-kotlin = "2.1.10"
-agp = "8.8.2"
+# AGP 9.5 needs Gradle 9.6+, JDK 17 and Kotlin Gradle plugin 2.2.10+; it compiles
+# Kotlin itself (built-in Kotlin), so there is no separate kotlin-android plugin.
+kotlin = "2.4.21"
+agp = "9.5.1"
 junit = "5.11.4"
-serialization = "1.8.0"
-coroutines = "1.10.1"
+serialization = "1.13.0"
+coroutines = "1.11.0"
 # Android (resolved from Google's Maven only when :android is built)
-composeBom = "2025.02.00"
-activityCompose = "1.10.0"
-lifecycle = "2.8.7"
-coreKtx = "1.15.0"
+composeBom = "2026.09.00"
+activityCompose = "1.13.0"
+lifecycle = "2.11.0"
+coreKtx = "1.19.1"
 # Maintained EXIF reader: the platform android.media.ExifInterface has known security bugs on old Android.
 exifinterface = "1.4.2"
 
@@ -34,6 +35,5 @@ androidx-compose-icons = { module = "androidx.compose.material:material-icons-co
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
