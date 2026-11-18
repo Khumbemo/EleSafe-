@@ -4,7 +4,8 @@ Elephant-incident reporting for the villages around Wokha, Nagaland.
 Villagers report sightings, crop raids and injuries; forest guards verify and
 respond; officers close cases, warn villages and track trends.
 
-This is a Python rebuild of the React/Firebase app in the repository root. It
+This is a Python rebuild of the first, React/Firebase version of HatiAlert
+(since removed from the repository; it remains in the git history). It
 has **no dependencies**: the server, database and password hashing all come
 from the Python standard library (3.10+).
 

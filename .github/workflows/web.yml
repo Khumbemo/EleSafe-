@@ -40,7 +40,7 @@ jobs:
 
   web:
     name: TypeScript, build, translations and browser tests
-    runs-on: ubuntu-24.04   # Playwright 1.56 cannot install Chromium on ubuntu-latest (26.04)
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
