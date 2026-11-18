@@ -57,7 +57,9 @@ jobs:
 
       - name: Android lint findings
         if: always()
-        run: cat android/build/reports/lint-results-debug.txt || echo "No lint report"
+        run: |
+          found=$(find android/build -name 'lint-results-debug*.txt' 2>/dev/null)
+          if [ -n "$found" ]; then cat $found; else echo "No lint text report"; find android/build -name 'lint-results*' 2>/dev/null; fi
 
       - name: Check the Android app was part of the build
         run: ls -l android/build/outputs/apk/debug/*.apk

@@ -36,14 +36,10 @@ android {
     }
 
     lint {
-        // The app is compiled only in CI (no SDK in the authoring container), so lint
-        // reports instead of failing the build; the report is uploaded as an artifact.
-        // Lint errors fail the build; warnings are reported in the log.
+        // Lint errors fail the build; warnings are reported (AGP 9 always writes the
+        // HTML and text reports; CI prints the text one into its log).
         abortOnError = true
         checkReleaseBuilds = true
-        htmlReport = true
-        // Plain-text copy (build/reports/lint-results-debug.txt) that CI prints into its log.
-        textReport = true
     }
 
     packaging {

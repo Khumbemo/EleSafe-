@@ -2,7 +2,6 @@ package org.hatialert.mobile.ui
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import org.hatialert.client.app.AppState
 import org.hatialert.client.app.ThemeChoice
 import org.hatialert.client.app.fmtKm
@@ -78,7 +78,7 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
             Row(
                 Modifier.fillMaxWidth().clickable {
                     try {
-                        context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + k.phone.filter { it.isDigit() || it == '+' })))
+                        context.startActivity(Intent(Intent.ACTION_DIAL, ("tel:" + k.phone.filter { it.isDigit() || it == '+' }).toUri()))
                     } catch (e: ActivityNotFoundException) {
                         // No dialler (e.g. a tablet); the number is on screen.
                     }

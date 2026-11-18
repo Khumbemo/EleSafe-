@@ -1,6 +1,7 @@
 package org.hatialert.mobile
 
 import android.content.Context
+import androidx.core.content.edit
 import org.hatialert.client.app.Settings
 import org.hatialert.client.app.SettingsStore
 import org.hatialert.client.app.ThemeChoice
@@ -42,7 +43,7 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
         }
         val token = cipher.decrypt(stored)
         if (token == null) {
-            prefs.edit().remove(KEY_TOKEN).apply()
+            prefs.edit { remove(KEY_TOKEN) }
             return null
         }
         known = token to stored
@@ -50,11 +51,11 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
     }
 
     override fun save(settings: Settings) {
-        prefs.edit()
-            .putString(KEY_SERVER, settings.serverUrl)
-            .putString(KEY_THEME, settings.theme.name)
-            .putString(KEY_PHONE, settings.lastPhone)
-            .apply()
+        prefs.edit {
+            putString(KEY_SERVER, settings.serverUrl)
+            putString(KEY_THEME, settings.theme.name)
+            putString(KEY_PHONE, settings.lastPhone)
+        }
         writeToken(settings.token)
     }
 
@@ -62,7 +63,7 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
         if (token == null) {
             known = null
             memoryOnlyToken = null
-            prefs.edit().remove(KEY_TOKEN).apply()
+            prefs.edit { remove(KEY_TOKEN) }
             return
         }
         val k = known
@@ -71,11 +72,11 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
         if (sealed == null) {
             known = null
             memoryOnlyToken = token
-            prefs.edit().remove(KEY_TOKEN).apply()
+            prefs.edit { remove(KEY_TOKEN) }
         } else {
             known = token to sealed
             memoryOnlyToken = null
-            prefs.edit().putString(KEY_TOKEN, sealed).apply()
+            prefs.edit { putString(KEY_TOKEN, sealed) }
         }
     }
 

@@ -4,9 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import androidx.core.content.FileProvider
+import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -42,7 +43,7 @@ object Photos {
                 ?: throw IOException("Couldn't read the photo.")
             val scale = maxSide.toFloat() / max(bmp.width, bmp.height)
             if (scale < 1f) {
-                bmp = Bitmap.createScaledBitmap(bmp, (bmp.width * scale).roundToInt(), (bmp.height * scale).roundToInt(), true)
+                bmp = bmp.scale((bmp.width * scale).roundToInt(), (bmp.height * scale).roundToInt())
             }
             val degrees = when (ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
                 ExifInterface.ORIENTATION_ROTATE_90 -> 90f
