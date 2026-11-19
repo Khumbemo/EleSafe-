@@ -31,6 +31,8 @@ data class ReportDraft(
     val description: String = "",
     /** JPEG/PNG/WebP bytes, already shrunk by the app. */
     val photos: List<ByteArray> = emptyList(),
+    /** Voice notes as recorded (AAC in MP4/M4A on Android), at most [MediaKind.VOICE_MAX_SECONDS] each. */
+    val voices: List<ByteArray> = emptyList(),
     /** Same id on a resend, so a dropped connection can't create a duplicate. */
     val clientId: String = UUID.randomUUID().toString().replace("-", ""),
 ) {
@@ -60,13 +62,7 @@ data class ReportDraft(
         }
         if (heading.isNotEmpty() && heading !in Geo.DIRECTIONS) e["heading"] = "Choose a direction from the list."
         if (description.trim().length > Limits.DESCRIPTION_MAX) e["description"] = "Keep this under ${Limits.DESCRIPTION_MAX} characters."
-        val rule = MediaKind.PHOTO
-        when {
-            photos.size > rule.maxCount() -> e["attachments"] = "A report can have up to ${rule.maxCount()} photos."
-            photos.any { it.size > rule.maxBytes() } -> e["attachments"] = "Each photo must be under ${plain(rule.maxBytes() / 1_000_000.0)} MB."
-            photos.any { it.isEmpty() } -> e["attachments"] = "That file is empty."
-            photos.any { MediaKind.sniff(it.copyOf(minOf(16, it.size))) !in rule.mimes() } -> e["attachments"] = "Use a JPEG, PNG or WebP photo."
-        }
+        (mediaProblem(MediaKind.PHOTO, photos) ?: mediaProblem(MediaKind.VOICE, voices))?.let { e["attachments"] = it }
         return e
     }
 
@@ -103,11 +99,32 @@ data class ReportDraft(
             offsetDir = if (gpsPoint == null) offsetDir else null,
             description = description.trim(),
             clientId = clientId,
-            attachments = photos.map { NewAttachment(MediaKind.PHOTO.key(), Base64.encode(it)) }.ifEmpty { null },
+            attachments = attachmentsOf(photos, voices),
         )
     }
 
     companion object {
+        /**
+         * What the server would say about these files (api.py `_media` / `_media_list`), or null.
+         * [existing] is how many of this kind the case already has.
+         */
+        fun mediaProblem(kind: MediaKind, files: List<ByteArray>, existing: Int = 0): String? {
+            val noun = if (kind == MediaKind.PHOTO) "photo" else "voice note"
+            return when {
+                files.any { it.isEmpty() } -> "That file is empty."
+                files.any { it.size > kind.maxBytes() } -> "Each $noun must be under ${plain(kind.maxBytes() / 1_000_000.0)} MB."
+                files.any { MediaKind.sniff(it.copyOf(minOf(16, it.size))) !in kind.mimes() } ->
+                    if (kind == MediaKind.PHOTO) "Use a JPEG, PNG or WebP photo." else "Use a recording in MP3, M4A, WebM, Ogg or WAV."
+                existing + files.size > kind.maxCount() -> "A report can have up to ${kind.maxCount()} ${noun}s."
+                else -> null
+            }
+        }
+
+        /** Request attachments: photos first, then voice notes; null when there are none. */
+        fun attachmentsOf(photos: List<ByteArray>, voices: List<ByteArray>): List<NewAttachment>? =
+            (photos.map { NewAttachment(MediaKind.PHOTO.key(), Base64.encode(it)) } +
+                voices.map { NewAttachment(MediaKind.VOICE.key(), Base64.encode(it)) }).ifEmpty { null }
+
         /** api.py's `_plain`: 15.0 -> "15", 27.5 -> "27.5". */
         fun plain(x: Double): String = if (x == Math.floor(x) && !x.isInfinite()) x.toLong().toString() else x.toString()
 

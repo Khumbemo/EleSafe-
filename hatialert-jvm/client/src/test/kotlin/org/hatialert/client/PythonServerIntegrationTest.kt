@@ -11,7 +11,13 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.hatialert.client.app.AdminData
+import org.hatialert.client.app.AdminSection
+import org.hatialert.client.app.AlertDraft
 import org.hatialert.client.app.AppController
+import org.hatialert.client.app.VillageForm
+import org.hatialert.client.app.plural
+import org.hatialert.core.MediaKind
 import org.hatialert.client.app.FileOutboxStore
 import org.hatialert.client.app.MemorySettingsStore
 import org.hatialert.client.app.Screen
@@ -59,36 +65,66 @@ class PythonServerIntegrationTest {
         dir = Files.createTempDirectory("hatialert-it").toFile()
         port = ServerSocket(0).use { it.localPort }
         base = "http://127.0.0.1:$port"
-        launch(pyDir)
+        launch()
     }
 
-    /** Starts the server on [port] with the same database and waits until it answers. */
-    private fun launch(pyDir: File = File(System.getProperty("hatialert.py.dir", "../../hatialert-py"))) {
-        server = ProcessBuilder(python, "-m", "hatialert", "--db", File(dir, "hatialert.db").path, "--host", "127.0.0.1", "--port", "$port")
+    private val log get() = File(dir, "server.log")
+
+    /**
+     * Starts the server on [port] with the same database and waits until it answers. Texts are
+     * on in debug mode (HATIALERT_SMS_DEBUG=1): the server prints them, one-time codes included,
+     * to its log, where [codeFor] reads them as the browser tests do.
+     */
+    private fun launch() {
+        server = startServer(File(dir, "hatialert.db"), port, log, sms = true)
+    }
+
+    private fun startServer(db: File, port: Int, log: File, sms: Boolean): Process {
+        val pyDir = File(System.getProperty("hatialert.py.dir", "../../hatialert-py"))
+        val pb = ProcessBuilder(python, "-m", "hatialert", "--db", db.path, "--host", "127.0.0.1", "--port", "$port")
             .directory(pyDir)
             .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.appendTo(File(dir, "server.log")))
-            .start()
-        val probe = HatiClient(base, UrlConnectionTransport(connectTimeoutMs = 500, readTimeoutMs = 2000))
+            .redirectOutput(ProcessBuilder.Redirect.appendTo(log))
+        pb.environment().remove("HATIALERT_SMS_URL")
+        if (sms) pb.environment()["HATIALERT_SMS_DEBUG"] = "1" else pb.environment().remove("HATIALERT_SMS_DEBUG")
+        pb.environment()["PYTHONUNBUFFERED"] = "1"
+        val proc = pb.start()
+        val probe = HatiClient("http://127.0.0.1:$port", UrlConnectionTransport(connectTimeoutMs = 500, readTimeoutMs = 2000))
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
         while (true) {
             try {
                 probe.meta()
-                break
+                return proc
             } catch (e: NetworkException) {
-                check(server!!.isAlive) { "server exited: " + File(dir, "server.log").readText() }
-                check(System.nanoTime() < deadline) { "server did not start: " + File(dir, "server.log").readText() }
+                check(proc.isAlive) { "server exited: " + log.readText() }
+                check(System.nanoTime() < deadline) { "server did not start: " + log.readText() }
                 Thread.sleep(200)
             }
         }
     }
 
-    private fun stop() {
-        server?.let {
-            it.destroy()
-            if (!it.waitFor(10, TimeUnit.SECONDS)) it.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
+    private fun codes(phone: String): List<String> =
+        Regex("""\[SMS to \+91$phone] HatiAlert code: (\d{6})""").findAll(log.readText()).map { it.groupValues[1] }.toList()
+
+    /** The newest texted code for [phone], waiting for the [n]th one to reach the log. */
+    private fun codeFor(phone: String, n: Int): String {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (true) {
+            val all = codes(phone)
+            if (all.size >= n) return all[n - 1]
+            check(System.nanoTime() < deadline) { "no code for $phone in the server log: " + log.readText().takeLast(2000) }
+            Thread.sleep(100)
         }
+    }
+
+    private fun stop() {
+        server?.let { kill(it) }
         server = null
+    }
+
+    private fun kill(p: Process) {
+        p.destroy()
+        if (!p.waitFor(10, TimeUnit.SECONDS)) p.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
     }
 
     @AfterAll
@@ -258,6 +294,375 @@ class PythonServerIntegrationTest {
         assertEquals(1, app.flushOutbox())
         assertEquals(1, vil.incidents(status = "all", mine = true).count { it.description == marker }, "client_id de-duplicated the resend")
         app.signOut()
+    }
+
+    // --- account, media, alerts and admin -------------------------------------------------
+
+    private val newPhone = "9876543210"
+    private var newPin = "408215"
+    private var guardCase = 0L
+
+    @Test
+    @Order(7)
+    fun registerWithTextedCodeAndForgotPin() = runBlocking {
+        assertTrue(client().meta().smsEnabled)
+        val c = client()
+        val sent = c.requestCode(newPhone, "register")
+        assertEquals("If this number can get texts, a 6-digit code is on its way.", sent.message)
+        val code = codeFor(newPhone, 1)
+
+        val weak = assertFailsWith<ApiException> { c.register("Akum Jamir", newPhone, "Wozhuro", "1234", code) }
+        assertEquals(400 to "pin", weak.status to weak.field)
+        assertEquals("That PIN is too easy to guess. Avoid repeated or running digits.", weak.message)
+        assertEquals("Choose a PIN of 4 to 6 digits.", assertFailsWith<ApiException> { c.register("Akum Jamir", newPhone, "Wozhuro", "12a", code) }.message)
+        val wrong = assertFailsWith<ApiException> { c.register("Akum Jamir", newPhone, "Wozhuro", newPin, if (code == "000000") "111111" else "000000") }
+        assertEquals("That code isn't right." to "code", wrong.message to wrong.field)
+
+        val s = c.register("Akum Jamir", newPhone, "Wozhuro", newPin, code)
+        assertEquals("villager", s.user.role)
+        assertTrue(s.user.phoneVerified, "a texted code verifies the number")
+        assertEquals(409, assertFailsWith<ApiException> { client().requestCode(newPhone, "register") }.status)
+
+        // Forgot PIN, through the app layer.
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        app.loadMeta()
+        app.navigate(Screen.ForgotPin)
+        assertEquals(Screen.ForgotPin, app.state.value.screen)
+        assertTrue(app.requestCode(newPhone, "reset"))
+        assertEquals("If this number can get texts, a 6-digit code is on its way.", app.state.value.authNote)
+        val resetCode = codeFor(newPhone, 2)
+        assertTrue(!app.resetPin(newPhone, resetCode, "719356", "719357"))
+        assertEquals(AppController.PINS_DIFFER, app.state.value.fieldErrors["pin2"])
+        assertTrue(app.resetPin(newPhone, resetCode, "719356", "719356"), app.state.value.message?.text)
+        newPin = "719356"
+        assertEquals(Screen.Home, app.state.value.screen)
+        assertEquals("New PIN saved", app.state.value.message?.text)
+        assertEquals(401, assertFailsWith<ApiException> { c.me() }.status, "a PIN reset ends the other sessions")
+        assertEquals(401, assertFailsWith<ApiException> { client().login(newPhone, "408215") }.status)
+        client().login(newPhone, newPin)
+        app.signOut()
+    }
+
+    @Test
+    @Order(8)
+    fun changePinAndSignOutOtherDevices() {
+        val a = client()
+        a.login(newPhone, newPin)
+        val b = client()
+        b.login(newPhone, newPin)
+        assertEquals("Your current PIN isn't right." to "old_pin", assertFailsWith<ApiException> { a.changePin("000000", "582947") }.let { it.message to it.field })
+        assertEquals("Choose a PIN different from the old one.", assertFailsWith<ApiException> { a.changePin(newPin, newPin) }.message)
+        assertEquals(400 to "pin", assertFailsWith<ApiException> { a.changePin(newPin, "1111") }.let { it.status to it.field })
+        val u = a.changePin(newPin, "582947")
+        newPin = "582947"
+        assertEquals(false, u.mustChangePin)
+        assertEquals(401, assertFailsWith<ApiException> { b.me() }.status, "changing the PIN signs out the other devices")
+        assertEquals(newPhone, a.me().phone)
+
+        val c = client()
+        c.login(newPhone, newPin)
+        a.logoutAll()
+        assertEquals(401, assertFailsWith<ApiException> { c.me() }.status)
+        assertEquals(newPhone, a.me().phone, "this device stays signed in")
+
+        val off = a.updateMe(ProfileUpdate(smsAlerts = false))
+        assertEquals(false, off.smsAlerts)
+        assertEquals(true, a.updateMe(ProfileUpdate(smsAlerts = true)).smsAlerts)
+        a.logout()
+    }
+
+    @Test
+    @Order(9)
+    fun officerResetForcesANewPin() = runBlocking {
+        val officer = client()
+        officer.login("9000000003", "3333")
+        val akum = officer.users(q = "Akum").single()
+        val reset = officer.resetUserPin(akum.id)
+        assertTrue(Regex("\\d{6}").matches(reset.tempPin), reset.tempPin)
+        assertTrue(reset.user.mustChangePin)
+
+        val raw = client()
+        assertTrue(raw.login(newPhone, reset.tempPin).user.mustChangePin)
+        val blocked = assertFailsWith<ApiException> { raw.overview() }
+        assertEquals(Triple(403, "pin", "Choose a new PIN first."), Triple(blocked.status, blocked.field, blocked.message))
+
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        assertTrue(app.signIn(newPhone, reset.tempPin))
+        assertEquals(Screen.NewPin, app.state.value.screen)
+        app.navigate(Screen.Cases)
+        assertEquals(Screen.NewPin, app.state.value.screen, "nothing else until a new PIN is chosen")
+        assertTrue(app.changePin(reset.tempPin, "640913", "640913"), app.state.value.message?.text)
+        newPin = "640913"
+        assertEquals(Screen.Home, app.state.value.screen)
+        assertEquals(false, app.state.value.user!!.mustChangePin)
+        assertNotNull(app.state.value.overview)
+        app.signOut()
+
+        // Locked out by wrong PINs, then unlocked.
+        repeat(2) { assertFailsWith<ApiException> { client().login(newPhone, "999999") } }
+        assertTrue(officer.users(q = newPhone).single().failed24h >= 2)
+        assertEquals(0, officer.unlockUser(akum.id).failed24h)
+
+        // Role and switching off.
+        assertEquals("guard", officer.updateUser(akum.id, UserPatch(role = "guard")).role)
+        assertEquals("villager", officer.updateUser(akum.id, UserPatch(role = "villager")).role)
+        assertEquals(false, officer.updateUser(akum.id, UserPatch(active = false)).active)
+        assertEquals("This account is switched off. Contact the forest office.", assertFailsWith<ApiException> { client().login(newPhone, newPin) }.message)
+        assertEquals(true, officer.updateUser(akum.id, UserPatch(active = true)).active)
+        client().login(newPhone, newPin)
+        val me = officer.me()
+        assertEquals(400, assertFailsWith<ApiException> { officer.updateUser(me.id, UserPatch(role = "guard")) }.status)
+        officer.logout()
+    }
+
+    private val m4a = byteArrayOf(0, 0, 0, 0x20) + "ftypM4A ".toByteArray() + ByteArray(200) { (it % 7).toByte() }
+    private val ogg = "OggS".toByteArray() + ByteArray(120) { 1 }
+
+    @Test
+    @Order(10)
+    fun voiceNotesAndPhotosUpAndDown() = runBlocking {
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        assertTrue(app.signIn("9000000001", "1111"))
+        val photo = jpeg + ByteArray(30) { 9 }
+        app.editDraft {
+            it.copy(type = IncidentType.CROP_RAID, herdSize = "6", village = "Wozhuro", offsetKm = "1", offsetDir = "N", photos = listOf(photo), voices = listOf(m4a))
+        }
+        val inc = assertNotNull(app.submitReport(), app.state.value.message?.text)
+        guardCase = inc.id
+        assertEquals(listOf("photo" to "image/jpeg", "voice" to "audio/mp4"), inc.attachments.map { it.kind to it.mime })
+
+        assertTrue(app.attachToCase(inc.id, MediaKind.VOICE, ogg), app.state.value.message?.text)
+        assertEquals("Voice note added", app.state.value.message?.text)
+        assertEquals(listOf("photo", "voice", "voice"), app.state.value.detail!!.attachments.map { it.kind })
+        assertTrue(!app.attachToCase(inc.id, MediaKind.VOICE, m4a))
+        assertEquals("A report can have up to 2 voice notes.", app.state.value.message?.text)
+
+        val ids = app.state.value.detail!!.attachments.map { it.id }
+        assertTrue(photo.contentEquals(app.attachmentBytes(ids[0])))
+        assertTrue(m4a.contentEquals(app.attachmentBytes(ids[1])))
+        assertTrue(ogg.contentEquals(app.attachmentBytes(ids[2])))
+
+        val vil = client()
+        vil.login("9000000001", "1111")
+        assertEquals("A report can have up to 2 voice notes.", assertFailsWith<ApiException> { vil.addAttachment(inc.id, "voice", m4a) }.message)
+        assertEquals(415 to "Use a JPEG, PNG or WebP photo.", assertFailsWith<ApiException> { vil.addAttachment(inc.id, "photo", m4a) }.let { it.status to it.message })
+        assertEquals("Use a recording in MP3, M4A, WebM, Ogg or WAV.", assertFailsWith<ApiException> { client().apply { login("9000000002", "2222") }.addAttachment(inc.id, "voice", "<html>".toByteArray()) }.message)
+
+        // Staff see and fetch the files; another villager sees only how many there are.
+        val guard = client()
+        guard.login("9000000002", "2222")
+        assertTrue(ogg.contentEquals(guard.attachmentBytes(ids[2])))
+        val other = client()
+        other.login(newPhone, newPin)
+        val seen = other.incident(inc.id)
+        assertEquals(emptyList(), seen.attachments)
+        assertEquals(3, seen.attachmentsHidden)
+        assertEquals("Only the reporter and forest staff can see these files.", assertFailsWith<ApiException> { other.attachment(ids[0]) }.message)
+        app.signOut()
+    }
+
+    @Test
+    @Order(11)
+    fun guardWarnsNearbyVillages() = runBlocking {
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        assertTrue(app.signIn("9000000002", "2222"))
+        app.openCase(guardCase)
+        val case = app.state.value.detail!!
+        assertTrue(app.warnNearby(case))
+        val st = app.state.value
+        assertEquals(Screen.ComposeAlert, st.screen)
+        val near = client().apply { login("9000000002", "2222") }.nearbyVillages(guardCase, 5.0)
+        assertEquals(near.map { it.name }.toSet(), st.alertDraft.villages)
+        assertTrue("Wozhuro" in st.alertDraft.villages)
+        assertEquals(guardCase, st.alertDraft.incidentId)
+        assertTrue(st.alertDraft.message.startsWith("About 6 elephants reported near Wozhuro."), st.alertDraft.message)
+
+        val sent = assertNotNull(app.sendAlert(), app.state.value.message?.text)
+        assertEquals("debug", sent.sms?.mode)
+        assertEquals(guardCase, sent.incidentId)
+        assertEquals(Screen.Alerts, app.state.value.screen)
+        assertEquals(AlertDraft.sentNote(sent.sms), app.state.value.message?.text)
+        assertEquals(sent.id, app.state.value.alerts.first().id)
+        assertTrue(sent.sms!!.recipients >= 2, "the villager and Akum in Wozhuro get texts")
+
+        app.composeAlert()
+        app.editAlert { it.copy(message = "Herd near the school") }
+        assertEquals(null, app.sendAlert())
+        assertEquals("Pick at least one village.", app.state.value.fieldErrors["villages"])
+        app.signOut()
+
+        val vil = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        assertTrue(vil.signIn("9000000001", "1111"))
+        vil.composeAlert(AlertDraft(message = "x", villages = setOf("Wozhuro")))
+        assertEquals(Screen.Home, vil.state.value.screen, "villagers can't open the alert form")
+        vil.signOut()
+    }
+
+    @Test
+    @Order(12)
+    fun officerAdmin() = runBlocking {
+        val o = client()
+        o.login("9000000003", "3333")
+        val people = o.users()
+        assertTrue(people.map { it.phone }.containsAll(listOf("9000000001", "9000000002", "9000000003", newPhone)))
+        assertEquals(listOf("9000000002"), o.users(role = "guard").map { it.phone })
+        assertEquals(listOf("Officer Kikon"), o.users(q = "Officer").map { it.name })
+
+        val added = o.addVillage(NewVillage("Lotsu", 26.25, 94.1, "Census 2011", verified = true))
+        assertEquals(true, added.verified)
+        assertEquals(409, assertFailsWith<ApiException> { o.addVillage(NewVillage("Lotsu", 26.25, 94.1)) }.status)
+        assertTrue(o.meta().villages.any { it.name == "Lotsu" })
+        val lat = assertFailsWith<ApiException> { o.updateVillage(added.id, VillagePatch(lat = 30.0)) }
+        assertEquals("Enter a value from 25.5 to 27." to "lat", lat.message to lat.field)
+        assertEquals(VillageForm(lat = "30", lng = "94.1").validate(isNew = false)["lat"], lat.message)
+        val src = assertFailsWith<ApiException> { o.updateVillage(added.id, VillagePatch(source = "")) }
+        assertEquals("Say where the position comes from before marking it checked.", src.message)
+        val hidden = o.updateVillage(added.id, VillagePatch(lat = 26.26, active = false))
+        assertEquals(26.26 to false, hidden.lat to hidden.active)
+        assertTrue(o.meta().villages.none { it.name == "Lotsu" })
+        assertTrue(o.adminVillages().any { it.name == "Lotsu" && !it.active })
+        o.updateVillage(added.id, VillagePatch(active = true))
+        val imp = o.importVillages("name,lat,lng,source\nChudi,26.21,94.18,GPS by guard\nBad,99,1,x\n")
+        assertEquals(Triple(1, 0, listOf(3)), Triple(imp.added, imp.updated, imp.skippedLines))
+
+        val box = o.outbox()
+        assertEquals("debug", box.mode)
+        val batch = box.batches.first()
+        assertEquals("warning", batch.level)
+        assertTrue(batch.recipients.isNotEmpty())
+        // In debug mode the server "sends" them itself (prints them); only texts to send by hand
+        // or failed ones can be marked, so marking these changes nothing.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (o.outbox().batches.first().counts != mapOf("sent" to batch.recipients.size)) {
+            check(System.nanoTime() < deadline) { "alert texts not sent: " + o.outbox().batches.first().counts }
+            Thread.sleep(100)
+        }
+        assertEquals(0, o.markMessages(batch.recipients.map { it.id }, "sent"))
+
+        val status = o.adminStatus()
+        assertEquals(SmsStatus(true, "debug", ""), status.sms)
+        assertTrue(status.storage.users >= 4 && status.storage.mediaBytes > 0)
+        assertTrue(status.audit.map { it.action }.containsAll(listOf("village_add", "pin_reset", "unlock", "village_import")))
+        assertEquals(14, status.system.backups?.keep)
+
+        val stats = o.stats(30)
+        assertEquals(30, stats.series.size)
+        assertTrue(stats.total > 0 && stats.byType.sumOf { it.count } == stats.total)
+        assertTrue(o.exportCsv(30).startsWith("report_no,reported_ist,type,"))
+
+        // The same through the app layer.
+        val app = AppController(MemorySettingsStore(Settings(serverUrl = base)), Dispatchers.IO)
+        assertTrue(app.signIn("9000000003", "3333"))
+        for (section in AdminSection.entries) {
+            app.navigate(Screen.Admin(section))
+            app.admin.load(section)
+        }
+        val a = app.state.value.admin
+        assertEquals(Screen.Admin(AdminSection.SYSTEM), app.state.value.screen)
+        assertNotNull(a.stats)
+        assertTrue(a.people.isNotEmpty() && a.villages.any { it.name == "Chudi" } && a.outbox != null && a.status != null)
+        app.admin.loadPeople(query = "Akum")
+        val akum = app.state.value.admin.people.single()
+        assertNotNull(app.admin.resetPin(akum.id))
+        assertEquals(akum.id, app.state.value.admin.tempPin?.user?.id)
+        assertTrue(app.state.value.admin.people.single().mustChangePin)
+        assertTrue(!app.admin.addVillage(VillageForm(name = "X", lat = "26.1", lng = "94.1")))
+        assertEquals("Enter the village name.", app.state.value.fieldErrors["name"])
+        assertTrue(app.admin.addVillage(VillageForm(name = "Pangti", lat = "26.18", lng = "94.33", source = "GPS by guard", verified = true)))
+        assertTrue(app.state.value.villages.any { it.name == "Pangti" }, "the app's village list is refreshed")
+        val pangti = app.state.value.admin.villages.first { it.name == "Pangti" }
+        assertTrue(app.admin.saveVillage(pangti.id, VillageForm.of(pangti).copy(verified = false, source = "")))
+        assertEquals(false, app.state.value.admin.villages.first { it.name == "Pangti" }.verified)
+        assertTrue(app.admin.exportCsv(7)!!.startsWith("report_no,"))
+        app.signOut()
+        assertEquals(AdminData(), app.state.value.admin, "admin data is dropped on sign-out")
+        o.logout()
+    }
+
+    @Test
+    @Order(13)
+    fun villagersAndGuardsAreRefusedStaffAndOfficerCalls() {
+        val vil = client()
+        vil.login("9000000001", "1111")
+        val staffOnly = "Only forest staff can do this."
+        val officerOnly = "Only forest officers can do this."
+        val calls: List<Pair<String, () -> Unit>> = listOf(
+            staffOnly to { vil.sendAlert(NewAlert("warning", "x", listOf("Wozhuro"))) },
+            staffOnly to { vil.nearbyVillages(guardCase) },
+            staffOnly to { vil.updateStatus(guardCase, "verified") },
+            officerOnly to { vil.users() },
+            officerOnly to { vil.updateUser(1, UserPatch(role = "officer")) },
+            officerOnly to { vil.resetUserPin(2) },
+            officerOnly to { vil.unlockUser(2) },
+            officerOnly to { vil.adminVillages() },
+            officerOnly to { vil.addVillage(NewVillage("Nope", 26.2, 94.2)) },
+            officerOnly to { vil.updateVillage(1, VillagePatch(active = false)) },
+            officerOnly to { vil.importVillages("name,lat,lng\nNope,26.2,94.2") },
+            officerOnly to { vil.outbox() },
+            officerOnly to { vil.markMessages(listOf(1), "sent") },
+            officerOnly to { vil.adminStatus() },
+            officerOnly to { vil.stats() },
+            officerOnly to { vil.exportCsv() },
+        )
+        for ((msg, call) in calls) {
+            val e = assertFailsWith<ApiException> { call() }
+            assertEquals(403 to msg, e.status to e.message)
+        }
+        val guard = client()
+        guard.login("9000000002", "2222")
+        for (call in listOf({ guard.users() }, { guard.stats() }, { guard.adminStatus() }, { guard.outbox() })) {
+            assertEquals(403 to officerOnly, assertFailsWith<ApiException> { call() }.let { it.status to it.message })
+        }
+    }
+
+    @Test
+    @Order(14)
+    fun serverWithoutTextMessages() = runBlocking {
+        val p2 = ServerSocket(0).use { it.localPort }
+        val log2 = File(dir, "plain.log")
+        val proc = startServer(File(dir, "plain.db"), p2, log2, sms = false)
+        try {
+            val url = "http://127.0.0.1:$p2"
+            assertEquals(false, HatiClient(url).meta().smsEnabled)
+            val e = assertFailsWith<ApiException> { HatiClient(url).requestCode(newPhone, "register") }
+            assertEquals(409 to "Text messages aren't set up on this server. Ask a forest officer.", e.status to e.message)
+            assertEquals(
+                "Text messages aren't set up on this server. Ask a forest officer to reset your PIN.",
+                assertFailsWith<ApiException> { HatiClient(url).resetPin(newPhone, "123456", "582947") }.message,
+            )
+
+            val app = AppController(MemorySettingsStore(Settings(serverUrl = url)), Dispatchers.IO)
+            app.loadMeta()
+            assertTrue(!app.requestCode(newPhone, "reset"))
+            assertEquals("Text messages aren't set up on this server. Ask a forest officer.", app.state.value.authNote)
+            // Without texts, sign-up needs no code (and the number stays unverified).
+            assertTrue(app.register("Akum Jamir", newPhone, "Wozhuro", "408215", "408215", null), app.state.value.message?.text)
+            assertEquals("Account created", app.state.value.message?.text)
+            assertEquals(false, app.state.value.user!!.phoneVerified)
+            app.signOut()
+
+            val guard = AppController(MemorySettingsStore(Settings(serverUrl = url)), Dispatchers.IO)
+            assertTrue(guard.signIn("9000000002", "2222"))
+            guard.composeAlert(AlertDraft(message = "Herd near Wozhuro", villages = setOf("Wozhuro")))
+            val sent = assertNotNull(guard.sendAlert())
+            assertEquals("manual", sent.sms?.mode)
+            assertEquals("Alert sent. ${plural(sent.sms!!.recipients, "person", "people")} to text by hand (Admin > Messages)", guard.state.value.message?.text)
+            guard.signOut()
+
+            val officer = AppController(MemorySettingsStore(Settings(serverUrl = url)), Dispatchers.IO)
+            assertTrue(officer.signIn("9000000003", "3333"))
+            officer.admin.loadOutbox()
+            val box = officer.state.value.admin.outbox!!
+            assertEquals("manual", box.mode)
+            val batch = box.batches.first { it.alertId == sent.id }
+            assertEquals(mapOf("manual" to sent.sms.recipients), batch.counts)
+            assertTrue(officer.admin.markSent(batch))
+            assertEquals(mapOf("sent" to sent.sms.recipients), officer.state.value.admin.outbox!!.batches.first { it.alertId == sent.id }.counts)
+            assertTrue(!officer.admin.retryFailed(batch), "nothing failed")
+            officer.signOut()
+        } finally {
+            kill(proc)
+        }
     }
 
     companion object {

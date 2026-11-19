@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import org.hatialert.client.app.AdminSection
 import org.hatialert.client.app.AppController
 import org.hatialert.client.app.Screen
 import org.hatialert.mobile.AppViewModel
@@ -72,23 +73,38 @@ fun HatiApp(vm: AppViewModel) {
         c.dismissMessage()
     }
 
-    val signedIn = st.user != null
-    val screen = if (signedIn) st.screen else Screen.SignIn
-    BackHandler(enabled = signedIn && screen != Screen.Home) {
-        c.navigate(if (screen is Screen.CaseDetail) Screen.Cases else Screen.Home)
+    // Thumbnails belong to the account that could see them.
+    LaunchedEffect(st.user?.id) { vm.thumbnails.evictAll() }
+
+    val user = st.user
+    val signedIn = user != null
+    val screen = when {
+        user == null -> if (st.screen in Screen.SIGNED_OUT) st.screen else Screen.SignIn
+        user.mustChangePin -> Screen.NewPin
+        else -> st.screen
     }
+    // The app's own screens only once the server is happy with the PIN.
+    val inApp = signedIn && screen != Screen.NewPin
+    val back = backFrom(screen)
+    BackHandler(enabled = back != null) { back?.let { c.navigate(it) } }
 
     val title = when (screen) {
         Screen.SignIn -> "HatiAlert"
+        Screen.Register -> "Create an account"
+        Screen.ForgotPin -> "Forgot your PIN?"
+        Screen.NewPin -> "HatiAlert"
         Screen.Home -> st.homeVillage?.name ?: "Home"
         Screen.Report -> "Report an incident"
         Screen.Cases -> if (st.user?.isStaff == true) "All cases" else "My reports"
         is Screen.CaseDetail -> st.detail?.ref ?: "Case"
         Screen.Alerts -> "Alerts"
+        Screen.ComposeAlert -> "Send an alert"
         Screen.Settings -> "Settings"
+        is Screen.Admin -> if (screen.section == AdminSection.STATS) "District overview" else "Admin"
     }
     val refresh: (suspend AppController.() -> Unit)? = when (screen) {
         is Screen.CaseDetail -> ({ openCase(screen.id) })
+        is Screen.Admin -> ({ admin.load(screen.section) })
         else -> TABS.firstOrNull { it.screen == screen }?.load
     }
 
@@ -97,21 +113,21 @@ fun HatiApp(vm: AppViewModel) {
             TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
-                    if (screen is Screen.CaseDetail) {
-                        IconButton(onClick = { c.navigate(Screen.Cases) }) {
+                    if (back != null && back != Screen.Home) {
+                        IconButton(onClick = { c.navigate(back) }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
                 },
                 actions = {
-                    if (signedIn && refresh != null) {
+                    if (inApp && refresh != null) {
                         IconButton(onClick = { vm.act(refresh) }) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
                     }
                 },
             )
         },
         bottomBar = {
-            if (signedIn && !win.rail) {
+            if (inApp && !win.rail) {
                 NavigationBar {
                     for (tab in TABS) {
                         NavigationBarItem(
@@ -130,7 +146,7 @@ fun HatiApp(vm: AppViewModel) {
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
-            if (signedIn && win.rail) {
+            if (inApp && win.rail) {
                 NavigationRail(windowInsets = WindowInsets(0, 0, 0, 0)) {
                     for (tab in TABS) {
                         NavigationRailItem(
@@ -161,11 +177,16 @@ fun HatiApp(vm: AppViewModel) {
                     else -> Box(centred) {
                         when (screen) {
                             Screen.SignIn -> SignInScreen(st, vm)
+                            Screen.Register -> RegisterScreen(st, vm)
+                            Screen.ForgotPin -> ForgotPinScreen(st, vm)
+                            Screen.NewPin -> NewPinScreen(st, vm)
                             Screen.Report -> ReportScreen(st, vm)
                             Screen.Cases -> CasesScreen(st, onOpen = openCase)
                             is Screen.CaseDetail -> CaseDetailScreen(st, vm)
-                            Screen.Alerts -> AlertsScreen(st)
+                            Screen.Alerts -> AlertsScreen(st, onCompose = { c.composeAlert() }, onOpenCase = openCase)
+                            Screen.ComposeAlert -> ComposeAlertScreen(st, vm)
                             Screen.Settings -> SettingsScreen(st, vm)
+                            is Screen.Admin -> AdminScreen(st, vm, screen.section)
                             Screen.Home -> Unit
                         }
                     }
@@ -177,4 +198,17 @@ fun HatiApp(vm: AppViewModel) {
 }
 
 private fun isSelected(tab: Tab, screen: Screen): Boolean =
-    screen == tab.screen || (tab.screen == Screen.Cases && screen is Screen.CaseDetail)
+    screen == tab.screen ||
+        (tab.screen == Screen.Cases && screen is Screen.CaseDetail) ||
+        (tab.screen == Screen.Alerts && screen == Screen.ComposeAlert) ||
+        (tab.screen == Screen.Settings && screen is Screen.Admin)
+
+/** Where Back goes from [screen], or null to leave it to the system (close the app). */
+private fun backFrom(screen: Screen): Screen? = when (screen) {
+    Screen.SignIn, Screen.Home, Screen.NewPin -> null
+    Screen.Register, Screen.ForgotPin -> Screen.SignIn
+    is Screen.CaseDetail -> Screen.Cases
+    Screen.ComposeAlert -> Screen.Alerts
+    is Screen.Admin -> Screen.Settings
+    else -> Screen.Home
+}

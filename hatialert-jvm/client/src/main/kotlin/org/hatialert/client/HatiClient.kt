@@ -50,6 +50,27 @@ class HatiClient(
         return s
     }
 
+    /**
+     * Asks the server to text a 6-digit code; [purpose] is `register` or `reset`. The answer is the
+     * same whether or not the number is known. Fails with 409 when the server has no SMS service.
+     */
+    fun requestCode(phone: String, purpose: String): OtpSent = send("POST", "/api/auth/otp", OtpRequest(phone, purpose))
+
+    /** Forgotten PIN: the texted [code] and a new [pin]; signs in on success (other sessions end). */
+    fun resetPin(phone: String, code: String, pin: String): Session {
+        val s: Session = send("POST", "/api/auth/reset", PinResetRequest(phone, code, pin))
+        token = s.token
+        return s
+    }
+
+    /** Changes the PIN (also the forced change after an officer reset); other sessions end, this one stays. */
+    fun changePin(oldPin: String, pin: String): User = send("POST", "/api/me/pin", PinChange(oldPin, pin))
+
+    /** Signs out every other phone and browser of this account; this session stays. */
+    fun logoutAll() {
+        send<JsonObject, JsonObject>("POST", "/api/me/logout-all", JsonObject(emptyMap()))
+    }
+
     /** Ends this session on the server and forgets the token (also when the server is unreachable). */
     fun logout() {
         try {
@@ -92,6 +113,16 @@ class HatiClient(
     fun addAttachment(id: Long, kind: String, bytes: ByteArray): Incident =
         send("POST", "/api/incidents/$id/attachments", NewAttachment(kind, Base64.encode(bytes)))
 
+    /** A stored photo or voice note (the reporter of its case and forest staff only). */
+    fun attachment(id: Long): AttachmentData = get("/api/attachments/$id")
+
+    /** The file of [attachment], decoded. */
+    fun attachmentBytes(id: Long): ByteArray = try {
+        Base64.decode(attachment(id).data)
+    } catch (e: IllegalArgumentException) {
+        throw ApiException(200, "The server sent something this app doesn't understand.", cause = e)
+    }
+
     /** Home screen data: the user's village, alert radius and open incidents within it. */
     fun overview(): Overview = get("/api/overview")
 
@@ -105,6 +136,48 @@ class HatiClient(
 
     /** Sends a warning, information or all-clear to villages (staff only). */
     fun sendAlert(alert: NewAlert): Alert = send("POST", "/api/alerts", alert)
+
+    // --- officer ----------------------------------------------------------------
+
+    /** District numbers for the last [days] days (1 to 365). */
+    fun stats(days: Int = 30): Stats = get("/api/stats" + query(listOf("days" to days.toString())))
+
+    /** The incidents of the last [days] days as CSV text. */
+    fun exportCsv(days: Int = 30): String = call("GET", "/api/export.csv" + query(listOf("days" to days.toString())), null)
+
+    /** People, searched by name or phone ([q]) and/or [role]. */
+    fun users(q: String = "", role: String = ""): List<AdminUser> =
+        get("/api/users" + query(listOf("q" to q, "role" to role)), ListSerializer(AdminUser.serializer()))
+
+    fun updateUser(id: Long, patch: UserPatch): AdminUser = send("PATCH", "/api/users/$id", patch)
+
+    /** Gives the person a temporary PIN (signs them out everywhere; they must choose a new PIN). */
+    fun resetUserPin(id: Long): PinReset = send("POST", "/api/users/$id/reset-pin", JsonObject(emptyMap()))
+
+    /** Clears the wrong-PIN count that locks a number out. */
+    fun unlockUser(id: Long): AdminUser = send("POST", "/api/users/$id/unlock", JsonObject(emptyMap()))
+
+    /** Every village, hidden ones too, with how many people and incidents each has. */
+    fun adminVillages(): List<AdminVillage> = get("/api/villages", ListSerializer(AdminVillage.serializer()))
+
+    fun addVillage(v: NewVillage): Village = send("POST", "/api/villages", v)
+
+    fun updateVillage(id: Long, patch: VillagePatch): AdminVillage = send("PATCH", "/api/villages/$id", patch)
+
+    /** Adds or updates villages from CSV text with a header row `name,lat,lng[,source]`. */
+    fun importVillages(csv: String): VillageImport = send("POST", "/api/villages/import", VillageCsv(csv))
+
+    /** Alert texts by alert, newest first. */
+    fun outbox(): Outbox = get("/api/outbox")
+
+    /** Marks texts `sent` (sent by hand) or `queued` (try failed ones again); returns how many changed. */
+    fun markMessages(ids: List<Long>, status: String): Int {
+        val r: JsonObject = send("POST", "/api/outbox/mark", MarkMessages(ids, status))
+        return r["updated"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+    }
+
+    /** Text-message service, storage, backups and the recent admin actions. */
+    fun adminStatus(): AdminStatus = get("/api/admin/status")
 
     // --- plumbing -----------------------------------------------------------
 

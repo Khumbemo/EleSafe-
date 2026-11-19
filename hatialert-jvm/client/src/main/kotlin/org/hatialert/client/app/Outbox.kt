@@ -7,10 +7,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import org.hatialert.client.NewAttachment
 import org.hatialert.client.NewIncident
-import org.hatialert.core.MediaKind
-import kotlin.io.encoding.Base64
 
 /**
  * A report that could not reach the server, waiting on the phone to be sent
@@ -24,17 +21,20 @@ class PendingReport(
     val report: NewIncident,
     val photos: List<ByteArray> = emptyList(),
     val queuedAt: Long = System.currentTimeMillis(),
+    val voices: List<ByteArray> = emptyList(),
 ) {
     /** The exact body for POST /api/incidents. */
-    fun toRequest(): NewIncident = report.copy(
-        clientId = clientId,
-        attachments = photos.map { NewAttachment(MediaKind.PHOTO.key(), Base64.encode(it)) }.ifEmpty { null },
-    )
+    fun toRequest(): NewIncident = report.copy(clientId = clientId, attachments = ReportDraft.attachmentsOf(photos, voices))
 
     companion object {
         /** Splits a request (as built by [ReportDraft.toRequest]) into a queue entry. */
-        fun of(request: NewIncident, photos: List<ByteArray>, userId: Long, queuedAt: Long = System.currentTimeMillis()) =
-            PendingReport(requireNotNull(request.clientId) { "client_id" }, userId, request.copy(attachments = null), photos, queuedAt)
+        fun of(
+            request: NewIncident,
+            photos: List<ByteArray>,
+            userId: Long,
+            queuedAt: Long = System.currentTimeMillis(),
+            voices: List<ByteArray> = emptyList(),
+        ) = PendingReport(requireNotNull(request.clientId) { "client_id" }, userId, request.copy(attachments = null), photos, queuedAt, voices)
     }
 }
 
@@ -74,6 +74,8 @@ class FileOutboxStore(private val dir: File) : OutboxStore {
         val report: NewIncident,
         val photos: List<String>,
         @SerialName("queued_at") val queuedAt: Long,
+        /** Added with voice notes; an index written before has none. */
+        val voices: List<String> = emptyList(),
     )
 
     override fun load(): List<PendingReport> {
@@ -86,33 +88,38 @@ class FileOutboxStore(private val dir: File) : OutboxStore {
             return emptyList()
         }
         return entries.mapNotNull { e ->
-            val photos = try {
-                e.photos.map { File(dir, it).readBytes() }
+            val (photos, voices) = try {
+                e.photos.map { File(dir, it).readBytes() } to e.voices.map { File(dir, it).readBytes() }
             } catch (_: IOException) {
-                return@mapNotNull null // a photo file is gone; the report can't be sent as taken
+                return@mapNotNull null // a file is gone; the report can't be sent as made
             }
-            PendingReport(e.clientId, e.userId, e.report, photos, e.queuedAt)
+            PendingReport(e.clientId, e.userId, e.report, photos, e.queuedAt, voices)
         }
     }
 
     override fun save(items: List<PendingReport>) {
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Can't create $dir")
         val entries = items.map { item ->
-            val names = item.photos.mapIndexed { i, bytes ->
-                val name = "${safe(item.clientId)}-$i.photo"
-                val f = File(dir, name)
-                // A queued photo never changes, so one already in place is kept.
-                if (!(f.isFile && f.length() == bytes.size.toLong())) writeAtomically(f, bytes)
-                name
-            }
-            Entry(item.clientId, item.userId, item.report.copy(attachments = null), names, item.queuedAt)
+            Entry(
+                item.clientId, item.userId, item.report.copy(attachments = null),
+                files(item.clientId, item.photos, "photo"), item.queuedAt, files(item.clientId, item.voices, "voice"),
+            )
         }
         writeAtomically(index, json.encodeToString(ListSerializer(Entry.serializer()), entries).toByteArray(Charsets.UTF_8))
-        val keep = entries.flatMap { it.photos }.toSet()
+        val keep = entries.flatMap { it.photos + it.voices }.toSet()
         dir.listFiles()?.forEach { f ->
-            if (f.name.endsWith(".photo") && f.name !in keep) f.delete()
+            if ((f.name.endsWith(".photo") || f.name.endsWith(".voice")) && f.name !in keep) f.delete()
             if (f.name.endsWith(".tmp")) f.delete()
         }
+    }
+
+    /** Writes each file as `<client id>-<n>.<ext>` and returns the names. */
+    private fun files(clientId: String, blobs: List<ByteArray>, ext: String): List<String> = blobs.mapIndexed { i, bytes ->
+        val name = "${safe(clientId)}-$i.$ext"
+        val f = File(dir, name)
+        // A queued file never changes, so one already in place is kept.
+        if (!(f.isFile && f.length() == bytes.size.toLong())) writeAtomically(f, bytes)
+        name
     }
 
     private fun writeAtomically(target: File, bytes: ByteArray) {

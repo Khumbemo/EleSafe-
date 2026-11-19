@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import org.hatialert.client.app.AppState
+import org.hatialert.client.app.Screen
 import org.hatialert.mobile.AppViewModel
 
 @Composable
@@ -61,6 +62,11 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
         FieldError(st.fieldErrors, "pin")
         Button(onClick = { vm.act { signIn(phone, pin) } }, enabled = !st.isBusy, modifier = Modifier.fillMaxWidth()) {
             Text("Sign in")
+        }
+        Row {
+            TextButton(onClick = { open(vm, Screen.Register) }) { Text("Create an account") }
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { open(vm, Screen.ForgotPin) }) { Text("Forgot your PIN?") }
         }
 
         val demo = st.meta?.demoAccounts.orEmpty()
@@ -97,6 +103,12 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
             }
         }
     }
+}
+
+/** Opens a signed-out screen with the server's current settings (whether it sends texts). */
+private fun open(vm: AppViewModel, screen: Screen) {
+    vm.controller.navigate(screen)
+    vm.act { loadMeta() }
 }
 
 @Composable

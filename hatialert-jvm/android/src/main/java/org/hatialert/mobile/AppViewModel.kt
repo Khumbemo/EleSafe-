@@ -1,6 +1,8 @@
 package org.hatialert.mobile
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.util.LruCache
 import android.net.ConnectivityManager
 import android.net.Network
 import androidx.lifecycle.AndroidViewModel
@@ -22,6 +24,15 @@ import org.hatialert.client.app.FileOutboxStore
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     val controller = AppController(PrefsSettingsStore(app), outbox = FileOutboxStore(File(app.filesDir, "outbox")))
     val state: StateFlow<AppState> = controller.state
+
+    /**
+     * Decoded photo thumbnails of open cases by attachment id, so scrolling and coming back
+     * don't decode again; at most 1/16 of the app's memory. Emptied when the account changes
+     * (the downloaded files themselves are cached and cleared in the controller).
+     */
+    val thumbnails = object : LruCache<Long, Bitmap>((Runtime.getRuntime().maxMemory() / 1024 / 16).toInt()) {
+        override fun sizeOf(key: Long, value: Bitmap) = value.byteCount / 1024
+    }
 
     private val connectivity: ConnectivityManager? = app.getSystemService(ConnectivityManager::class.java)
 
