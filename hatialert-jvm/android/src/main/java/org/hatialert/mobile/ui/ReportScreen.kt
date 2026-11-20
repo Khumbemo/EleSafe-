@@ -1,6 +1,5 @@
 package org.hatialert.mobile.ui
 
-import android.content.ActivityNotFoundException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -32,8 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -41,12 +40,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import java.io.File
-import java.io.IOException
 import java.util.Locale
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.hatialert.client.app.AppState
 import org.hatialert.client.app.nearestVillage
 import org.hatialert.core.IncidentType
@@ -67,7 +62,7 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     var gpsBusy by remember { mutableStateOf(false) }
     var gpsNote by remember { mutableStateOf<String?>(null) }
-    var pendingPhoto by rememberSaveable { mutableStateOf<String?>(null) }
+    var mediaNote by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(st.user?.village) {
         if (d.village == null) st.user?.village?.let { v -> c.editDraft { it.copy(village = v) } }
@@ -91,22 +86,10 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         if (grants.values.any { it }) locate() else gpsNote = "Location permission refused. Use distance from a village instead."
     }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
-        val path = pendingPhoto
-        pendingPhoto = null
-        if (saved && path != null) {
-            scope.launch {
-                try {
-                    val bytes = withContext(Dispatchers.IO) { Photos.shrink(File(path)) }
-                    c.editDraft { it.copy(photos = it.photos + bytes) }
-                } catch (e: IOException) {
-                    gpsNote = e.message
-                }
-            }
-        } else if (path != null) {
-            File(path).delete()
-        }
-    }
+    val takePhoto = rememberPhotoCapture(
+        onPhoto = { bytes -> c.editDraft { it.copy(photos = it.photos + bytes) } },
+        onError = { mediaNote = it },
+    )
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         st.pendingNote?.let { note -> PendingNote(note) { vm.act { flushOutbox() } } }
@@ -199,22 +182,23 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
                 }
             }
         }
-        OutlinedButton(
-            enabled = d.photos.size < MediaKind.PHOTO.maxCount(),
-            onClick = {
-                try {
-                    val (file, uri) = Photos.newCaptureTarget(context)
-                    pendingPhoto = file.path
-                    camera.launch(uri)
-                } catch (e: ActivityNotFoundException) {
-                    pendingPhoto = null
-                    gpsNote = "No camera app found on this phone."
-                } catch (e: IllegalArgumentException) {
-                    pendingPhoto = null
-                    gpsNote = "Couldn't prepare a file for the photo."
+        OutlinedButton(enabled = d.photos.size < MediaKind.PHOTO.maxCount(), onClick = takePhoto) { Text("Take a photo") }
+
+        Text("Voice notes (${d.voices.size} of ${MediaKind.VOICE.maxCount()}, up to ${MediaKind.VOICE_MAX_SECONDS} s each)", style = MaterialTheme.typography.bodyMedium)
+        d.voices.forEachIndexed { index, bytes ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    VoicePlayButton(bytes, "audio/mp4", "Voice note ${index + 1} · ${kb(bytes.size.toLong())}") { bytes }
                 }
-            },
-        ) { Text("Take a photo") }
+                TextButton(onClick = { c.editDraft { it.copy(voices = it.voices.filterIndexed { i, _ -> i != index }) } }) { Text("Remove") }
+            }
+        }
+        VoiceRecordButton(
+            enabled = d.voices.size < MediaKind.VOICE.maxCount(),
+            onDone = { bytes -> c.editDraft { it.copy(voices = it.voices + bytes) } },
+            onError = { mediaNote = it },
+        )
+        mediaNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
         FieldError(err, "attachments")
 
         d.severityPreview()?.let { s ->

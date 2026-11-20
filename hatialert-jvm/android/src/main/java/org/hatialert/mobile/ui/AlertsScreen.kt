@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -19,9 +21,17 @@ import androidx.compose.ui.unit.dp
 import org.hatialert.client.app.AppState
 
 @Composable
-fun AlertsScreen(st: AppState) {
+fun AlertsScreen(st: AppState, onCompose: () -> Unit, onOpenCase: (Long) -> Unit) {
     val p = LocalPalette.current
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (st.user?.isStaff == true) {
+            item {
+                Button(onClick = onCompose, modifier = Modifier.fillMaxWidth()) { Text("Send an alert") }
+            }
+        }
+        item {
+            Text("Warnings from forest staff. Alerts for ${st.user?.village ?: "your village"} are marked.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+        }
         if (st.alerts.isEmpty()) item { Text(if (st.isBusy) "Loading..." else "No alerts.", color = argb(p.muted)) }
         items(st.alerts, key = { it.id }) { a ->
             val (fg, bg) = when (a.level) {
@@ -44,6 +54,7 @@ fun AlertsScreen(st: AppState) {
                         a.villages.joinToString() + " · " + istTime(a.sentAt) + (a.by?.let { " · $it" } ?: ""),
                         style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
                     )
+                    a.incidentId?.let { id -> TextButton(onClick = { onOpenCase(id) }) { Text("View case") } }
                 }
             }
         }
