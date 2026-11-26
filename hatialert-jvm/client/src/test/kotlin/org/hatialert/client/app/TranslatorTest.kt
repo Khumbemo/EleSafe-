@@ -66,8 +66,10 @@ class TranslatorTest {
     fun tableIsComplete() {
         val text = Translator::class.java.getResourceAsStream("/nagamese.json")!!.readBytes().toString(Charsets.UTF_8)
         val root = kotlinx.serialization.json.Json.parseToJsonElement(text) as kotlinx.serialization.json.JsonObject
-        assertEquals(441, (root["words"] as kotlinx.serialization.json.JsonObject).size)
-        assertEquals(55, (root["patterns"] as kotlinx.serialization.json.JsonArray).size)
+        // The exact table is pinned to web-ts/src/i18n/nagamese.ts by nagameseJsonIsFresh; here,
+        // only that it was generated with both parts present.
+        assertTrue((root["words"] as kotlinx.serialization.json.JsonObject).size > 400)
+        assertTrue((root["patterns"] as kotlinx.serialization.json.JsonArray).size > 50)
     }
 
     /**
@@ -107,22 +109,50 @@ class TranslatorTest {
     }
 
     companion object {
-        /** From hatialert-py/tools/check_i18n.cjs. */
-        val SAMPLES = listOf(
-            "Elephant warning · Wozhuro", "Within 5 km of Wozhuro", "3 open incidents near you", "1 open incident near you",
-            "2 open incidents elsewhere in the district. You'll see new reports here.", "2.3 km SW of Wokha Town", "· 6 elephants",
-            "5 min ago", "3 h ago", "2 days ago", "of 1:00", "0.5 km away", "Using 26.1, 94.2 (±12 m)", "1 photo, 1 voice note", "3 cases",
-            "1.5 acres", "Warnings from forest staff. Alerts for Sanis are marked.", "30 days", "4 still open", "across 9 cases",
-            "1 false report", "crops · ₹87,000 property", "CSV · last 30 days", "4 Oct: 2 incidents", "Copy Police number",
-            "Theme: Navy blue", "Language: English", "Engine: Python server", "View photo 2", "Voice note 1", "Your 5 km alert area",
-            "Sanis: position not verified", "Enter a value from 0 to 200.", "Keep this under 400 characters.",
-            "Each photo must be under 1.5 MB.", "A report can have up to 2 voice notes.", "Too many wrong PINs. Try again in 3 min.",
-            "A verified case can't move to that status.", "2 reports", "No connection. Showing what was saved at 07:48 am.",
-            "Saved report sent: HA-2610-0015", "A saved report couldn't be sent: Choose what happened.",
-            "2 photos or voice notes, seen only by the reporter and forest staff.", "Alert sent. 3 people to text by hand (Admin › Messages)",
-            "Alert sent. Texting 1 person", "Text me alerts for Wozhuro", "2 wrong PINs today", "Last seen 5 min ago", "Temporary PIN for",
-            "8 village positions are not checked yet. Distances and alert areas depend on them.", "Imported: 1 added, 1 updated",
-            "Skipped 1 line with a problem: 4", "2 people", "1 incident", "Sent: 1", "6 elephants",
-        )
+        /**
+         * The English examples every pattern must match: read from hatialert-py/tools/check_i18n.cjs,
+         * the same list the web app's check uses, so the two can't drift apart.
+         */
+        val SAMPLES: List<String> by lazy { readJsSamples(File(System.getProperty("hatialert.py.dir", "../../hatialert-py"), "tools/check_i18n.cjs")) }
+
+        /** The double-quoted string literals in `const SAMPLES = [ ... ];`, skipping `//` comments. */
+        fun readJsSamples(file: File): List<String> {
+            assumeTrue(file.isFile, "check_i18n.cjs not found at $file")
+            val text = file.readText()
+            val start = text.indexOf("const SAMPLES = [")
+            val end = text.indexOf("\n];", start)
+            check(start >= 0 && end > start) { "SAMPLES array not found in $file" }
+            val out = ArrayList<String>()
+            for (line in text.substring(start + "const SAMPLES = [".length, end).lines()) {
+                var k = 0
+                while (k < line.length) {
+                    val c = line[k]
+                    if (c == '/' && k + 1 < line.length && line[k + 1] == '/') break
+                    if (c == '"') {
+                        val sb = StringBuilder()
+                        k++
+                        while (k < line.length && line[k] != '"') {
+                            if (line[k] == '\\' && k + 1 < line.length) {
+                                k++
+                                sb.append(
+                                    when (line[k]) {
+                                        'n' -> '\n'
+                                        't' -> '\t'
+                                        else -> line[k]
+                                    },
+                                )
+                            } else {
+                                sb.append(line[k])
+                            }
+                            k++
+                        }
+                        out.add(sb.toString())
+                    }
+                    k++
+                }
+            }
+            check(out.size > 50) { "only ${out.size} samples read from $file" }
+            return out
+        }
     }
 }

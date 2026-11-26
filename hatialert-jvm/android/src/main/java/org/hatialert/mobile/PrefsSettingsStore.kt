@@ -2,6 +2,7 @@ package org.hatialert.mobile
 
 import android.content.Context
 import androidx.core.content.edit
+import org.hatialert.client.app.Language
 import org.hatialert.client.app.Settings
 import org.hatialert.client.app.SettingsStore
 import org.hatialert.client.app.ThemeChoice
@@ -31,6 +32,8 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
         theme = ThemeChoice.fromName(prefs.getString(KEY_THEME, null)),
         token = loadToken(),
         lastPhone = prefs.getString(KEY_PHONE, null) ?: "",
+        language = Language.fromName(prefs.getString(KEY_LANGUAGE, null)),
+        notifications = prefs.getBoolean(KEY_NOTIFICATIONS, false),
     )
 
     private fun loadToken(): String? {
@@ -55,6 +58,8 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
             putString(KEY_SERVER, settings.serverUrl)
             putString(KEY_THEME, settings.theme.name)
             putString(KEY_PHONE, settings.lastPhone)
+            putString(KEY_LANGUAGE, settings.language.name)
+            putBoolean(KEY_NOTIFICATIONS, settings.notifications)
         }
         writeToken(settings.token)
     }
@@ -85,5 +90,7 @@ class PrefsSettingsStore(context: Context, private val cipher: TokenCipher = Tok
         const val KEY_THEME = "theme"
         const val KEY_TOKEN = "token"
         const val KEY_PHONE = "last_phone"
+        const val KEY_LANGUAGE = "language"
+        const val KEY_NOTIFICATIONS = "notifications"
     }
 }

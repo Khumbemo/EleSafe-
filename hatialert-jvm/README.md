@@ -229,8 +229,25 @@ screen and window resizing:
 Forms and text are capped at 720 dp wide, content keeps clear of camera cut-outs, and the app does not require a
 touchscreen, camera, GPS or phone line, so tablets and Chromebooks can install it.
 
-Still only in the web app: the profile form (name, home village, alert radius), browser notifications, the
-language switch (Nagamese), the safety guide and compensation pages, the in-browser demo engine, and removing the
+**Warning notifications.** Settings > Alerts > "Show alerts on this phone" turns on a background check
+(AndroidX WorkManager, about every 15 minutes, only with a network and while someone is signed in) that shows
+a notification for each new warning affecting the person's village; tapping it opens Alerts. Android may run
+the check later to save battery, so text messages stay the fast channel. Android 13+ asks for permission when
+the switch is turned on. Which warnings count, and showing each only once, is decided in `client`
+(`AlertWatch`, tested against the real server).
+
+**Nagamese.** Settings > Language switches the app between English and the web app's draft Nagamese:
+`client/src/main/resources/nagamese.json` is generated from `hatialert-py/web-ts/src/i18n/nagamese.ts` by
+`tools/gen_nagamese.py` (a test fails when it is stale). Text with no Nagamese entry yet stays in English, as on
+the web; names, messages and report numbers are never translated.
+
+**Map.** The same offline topographic map as the web app: SRTM hillshade, 100 m contours (every 500 m darker),
+streams by order, district boundaries and Mount Tiyi, under the km grid, villages, incidents and the alert ring,
+with pinch-zoom, drag, zoom buttons and "fit". The data is in `android/src/main/assets/map`, copied from
+`hatialert-py/hatialert/web/map` by `./gradlew syncMapAssets` (a test fails when the copies differ).
+
+Still only in the web app: the profile form (name, home village, alert radius), the safety guide and
+compensation pages, the officers' "Patterns" charts, the in-browser demo engine, and removing the
 sample data. The app records voice notes as M4A only; it plays whatever the server stores through Android's own
 decoders (voice notes recorded in a browser are usually WebM or Ogg with Opus, which Android 7 and later can
 play; not yet tried on a device).

@@ -1,7 +1,11 @@
 package org.hatialert.mobile.ui
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,12 +36,14 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import org.hatialert.client.app.AdminSection
 import org.hatialert.client.app.AppState
+import org.hatialert.client.app.Language
 import org.hatialert.client.app.Screen
 import org.hatialert.client.app.ThemeChoice
 import org.hatialert.client.app.fmtKm
 import org.hatialert.core.Contacts
 import org.hatialert.core.Role
 import org.hatialert.mobile.AppViewModel
+import org.hatialert.mobile.Warnings
 
 @Composable
 fun SettingsScreen(st: AppState, vm: AppViewModel) {
@@ -46,6 +52,10 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
     val context = LocalContext.current
     var server by rememberSaveable { mutableStateOf(st.settings.serverUrl) }
     var serverError by rememberSaveable { mutableStateOf<String?>(null) }
+    // Android 13+ asks the person before notifications can show; the switch follows the answer.
+    val notifyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        c.setNotifications(granted)
+    }
     var askLogoutAll by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -60,6 +70,22 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
                 }
             }
         }
+        HorizontalDivider()
+
+        Text(tr("Language"), style = MaterialTheme.typography.titleMedium)
+        for (l in Language.entries) {
+            Row(
+                Modifier.fillMaxWidth().clickable { c.setLanguage(l) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = st.settings.language == l, onClick = { c.setLanguage(l) })
+                Text(l.label)
+            }
+        }
+        Text(
+            "Nagamese is a draft translation, to be checked by a native speaker.",
+            style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
+        )
         HorizontalDivider()
 
         Text(tr("Theme"), style = MaterialTheme.typography.titleMedium)
@@ -82,6 +108,23 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
             }
             Text(
                 if (st.meta?.smsEnabled == true) "Sent to your mobile number as SMS." else "Forest staff send these by hand until text messages are set up.",
+                style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
+            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr("Show alerts on this phone"), modifier = Modifier.weight(1f))
+                Switch(
+                    checked = st.settings.notifications && Warnings.mayNotify(context),
+                    onCheckedChange = { on ->
+                        if (on && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !Warnings.mayNotify(context)) {
+                            notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            c.setNotifications(on)
+                        }
+                    },
+                )
+            }
+            Text(
+                tr("Checked about every 15 minutes while the app is closed, so text messages are faster."),
                 style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
             )
             HorizontalDivider()

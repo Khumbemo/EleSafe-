@@ -118,6 +118,13 @@ of **sample** incidents (an officer can remove them from the Home screen):
   to correct it. Text people type is never translated.
 - **District overview** (officers): incidents per day, hotspot villages,
   median response time, losses, CSV export.
+- **Patterns: where and when** (officers, on the District overview): hotspot
+  villages ranked by a severity score, a hotspot map of 2 × 2 km UTM squares,
+  reports by month of the year (seasonality) and by hour of the day in IST
+  with night (18:00 to 06:00) shaded, filterable by type and period. Sample
+  data and false reports are left out unless asked for, and with few reports
+  the page says to read the numbers as counts, not trends. Every chart has a
+  table version.
 - **Themes** (More > Theme): Green follows the phone's light or dark mode;
   White, Dark and Navy blue are fixed. The choice is kept on the device.
   Every text colour pair meets WCAG AA contrast (4.5:1).
@@ -172,7 +179,7 @@ preview/        built preview: the app running in the browser with Pyodide (see 
 ## Tests
 
 ```sh
-python -m unittest             # 64 tests: rules, geography, UTM vs PROJ, map data, auth and lockout, sessions,
+python -m unittest             # 77 tests: rules, geography, UTM vs PROJ, map data, auth and lockout, sessions,
                                # PINs and codes, admin, villages, privacy, limits, SMS, backups, migrations, CSV
 node tools/parity.cjs          # the preview's JS fallback answers 97 requests exactly like api.py
 node tools/check_i18n.cjs      # Nagamese patterns are valid; the browser's UTM maths (web-ts/src/geo.ts) matches PROJ
