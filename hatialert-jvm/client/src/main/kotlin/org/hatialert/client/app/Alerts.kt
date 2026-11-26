@@ -61,7 +61,7 @@ data class AlertDraft(
             val n = sms?.recipients ?: 0
             return when {
                 n == 0 -> "Alert sent"
-                sms?.mode == "manual" -> "Alert sent. ${plural(n, "person", "people")} to text by hand (Admin > Messages)"
+                sms?.mode == "manual" -> "Alert sent. ${plural(n, "person", "people")} to text by hand (Admin › Messages)"
                 else -> "Alert sent. Texting ${plural(n, "person", "people")}"
             }
         }

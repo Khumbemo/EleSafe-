@@ -26,13 +26,13 @@ fun AlertsScreen(st: AppState, onCompose: () -> Unit, onOpenCase: (Long) -> Unit
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (st.user?.isStaff == true) {
             item {
-                Button(onClick = onCompose, modifier = Modifier.fillMaxWidth()) { Text("Send an alert") }
+                Button(onClick = onCompose, modifier = Modifier.fillMaxWidth()) { Text(tr("Send an alert")) }
             }
         }
         item {
-            Text("Warnings from forest staff. Alerts for ${st.user?.village ?: "your village"} are marked.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+            Text(tr("Warnings from forest staff. Alerts for ${st.user?.village ?: "your village"} are marked."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
         }
-        if (st.alerts.isEmpty()) item { Text(if (st.isBusy) "Loading..." else "No alerts.", color = argb(p.muted)) }
+        if (st.alerts.isEmpty()) item { Text(tr(if (st.isBusy) "Loading…" else "No alerts yet"), color = argb(p.muted)) }
         items(st.alerts, key = { it.id }) { a ->
             val (fg, bg) = when (a.level) {
                 "warning" -> p.crit to p.critSoft
@@ -45,7 +45,7 @@ fun AlertsScreen(st: AppState, onCompose: () -> Unit, onOpenCase: (Long) -> Unit
             ) {
                 Column(Modifier.padding(12.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(a.levelLabel, color = argb(fg), fontWeight = FontWeight.Bold)
+                        Text(tr(a.levelLabel), color = argb(fg), fontWeight = FontWeight.Bold)
                         if (a.active) Badge("Active", p.crit, p.critSoft)
                         if (a.affectsMe) Badge("Your village", p.accent, p.accentSoft)
                     }
@@ -54,7 +54,7 @@ fun AlertsScreen(st: AppState, onCompose: () -> Unit, onOpenCase: (Long) -> Unit
                         a.villages.joinToString() + " · " + istTime(a.sentAt) + (a.by?.let { " · $it" } ?: ""),
                         style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
                     )
-                    a.incidentId?.let { id -> TextButton(onClick = { onOpenCase(id) }) { Text("View case") } }
+                    a.incidentId?.let { id -> TextButton(onClick = { onOpenCase(id) }) { Text(tr("View case")) } }
                 }
             }
         }

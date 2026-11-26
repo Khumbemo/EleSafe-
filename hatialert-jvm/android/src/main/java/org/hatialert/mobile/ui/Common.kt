@@ -28,7 +28,7 @@ import org.hatialert.core.Ist
 @Composable
 fun Badge(text: String, fg: Long, bg: Long, modifier: Modifier = Modifier) {
     Text(
-        text,
+        tr(text),
         color = argb(fg),
         style = MaterialTheme.typography.labelMedium,
         fontWeight = FontWeight.Bold,
@@ -49,7 +49,7 @@ fun SeverityBadge(key: String, label: String) {
 @Composable
 fun DirectionChips(selected: String, none: String, onSelect: (String) -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilterChip(selected = selected.isEmpty(), onClick = { onSelect("") }, label = { Text(none) })
+        FilterChip(selected = selected.isEmpty(), onClick = { onSelect("") }, label = { Text(tr(none)) })
         for (d in Geo.DIRECTIONS) {
             FilterChip(selected = selected == d, onClick = { onSelect(d) }, label = { Text(d) })
         }
@@ -59,7 +59,7 @@ fun DirectionChips(selected: String, none: String, onSelect: (String) -> Unit) {
 @Composable
 fun FieldError(errors: Map<String, String>, vararg keys: String) {
     val msg = keys.firstNotNullOfOrNull { errors[it] } ?: return
-    Text(msg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    Text(tr(msg), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
 }
 
 /** "2 reports waiting to send" with a button to try now (the web app's queue note). */
@@ -69,13 +69,21 @@ fun PendingNote(text: String, onSendNow: () -> Unit) {
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = argb(p.medSoft))) {
         Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(text, color = argb(p.ink), fontWeight = FontWeight.Bold)
-                Text("Saved on this phone. They send by themselves when you're back online.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+                Text(tr(text), color = argb(p.ink), fontWeight = FontWeight.Bold)
+                Text(tr("Saved on this phone. They send by themselves when you're back online."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
             }
-            TextButton(onClick = onSendNow) { Text("Send now") }
+            TextButton(onClick = onSendNow) { Text(tr("Send now")) }
         }
     }
 }
 
 /** IST time as the web app shows it ("2026-10-01 14:05 IST"). */
 fun istTime(ms: Long) = Ist.stamp(ms) + " IST"
+
+/** The web app's names for the roles (translated with [tr] where shown). */
+fun roleLabel(role: String): String = when (role) {
+    "villager" -> "Villager"
+    "guard" -> "Forest guard"
+    "officer" -> "Forest officer"
+    else -> role
+}

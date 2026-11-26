@@ -236,7 +236,7 @@ class AccountMediaAlertAdminTest {
         val sent = app.sendAlert()
         assertEquals(9L, sent?.id)
         assertTrue(t.bodyOf(t.requests.last { it.method == "POST" })!!.contains(""""villages":["Wokha Town","Wozhuro"]"""), "in the server's village order")
-        assertEquals("Alert sent. 1 person to text by hand (Admin > Messages)", app.state.value.message?.text)
+        assertEquals("Alert sent. 1 person to text by hand (Admin › Messages)", app.state.value.message?.text)
         assertEquals(Screen.Alerts, app.state.value.screen)
         assertEquals(AlertDraft(), app.state.value.alertDraft)
     }

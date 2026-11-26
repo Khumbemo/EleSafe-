@@ -7,6 +7,9 @@ const fs = require("fs");
 const createFallbackEngine = new Function(fs.readFileSync(path.join(__dirname, "preview/fallback.js"), "utf8") + "\nreturn createFallbackEngine;")();
 
 const H = 3600000;
+// The seed holds 83 incidents (13 recent + 70 older for the pattern charts), so
+// the first incident this scenario posts is number 84 (checked below).
+const NEW = 84;
 const login = (role, phone, pin) => ({ method: "POST", path: "/api/auth/login", body: { phone, pin }, login: role });
 const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 const JPEG = b64([0xff, 0xd8, 0xff, 0xe0, ...Array(60).fill(7)]);
@@ -54,14 +57,14 @@ const S = [
   { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Ralan", offset_km: 1 } },
   { as: "v", method: "POST", path: "/api/incidents", body: { type: "sighting", village: "Nowhere" } },
   { as: "v", method: "GET", path: "/api/incidents?mine=1&status=all" },
-  { as: "v", method: "PATCH", path: "/api/incidents/14", body: { status: "verified" } },
-  { as: "g", method: "PATCH", path: "/api/incidents/14", body: { status: "resolved" }, advance: H },
-  { as: "g", method: "PATCH", path: "/api/incidents/14", body: { status: "verified", note: "Seen" } },
-  { as: "g", method: "PATCH", path: "/api/incidents/14", body: { status: "responded" }, advance: 2 * H },
-  { as: "g", method: "PATCH", path: "/api/incidents/14", body: { status: "resolved" } },
-  { as: "o", method: "PATCH", path: "/api/incidents/14", body: { status: "resolved", note: "Paid" }, advance: 3 * H },
-  { as: "g", method: "PATCH", path: "/api/incidents/14", body: {} },
-  { as: "g", method: "GET", path: "/api/incidents/14/villages?km=6" },
+  { as: "v", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "verified" } },
+  { as: "g", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "resolved" }, advance: H },
+  { as: "g", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "verified", note: "Seen" } },
+  { as: "g", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "responded" }, advance: 2 * H },
+  { as: "g", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "resolved" } },
+  { as: "o", method: "PATCH", path: `/api/incidents/${NEW}`, body: { status: "resolved", note: "Paid" }, advance: 3 * H },
+  { as: "g", method: "PATCH", path: `/api/incidents/${NEW}`, body: {} },
+  { as: "g", method: "GET", path: `/api/incidents/${NEW}/villages?km=6` },
   { as: "g", method: "POST", path: "/api/alerts", body: { level: "all_clear", message: "Herd left", villages: ["Wozhuro", "Tening"], incident_id: 1 } },
   { as: "g", method: "POST", path: "/api/alerts", body: { level: "warning", message: "", villages: ["Wozhuro"] } },
   { as: "v", method: "GET", path: "/api/alerts" },
@@ -73,12 +76,24 @@ const S = [
   { as: "o", method: "GET", path: "/api/stats?days=7" },
   { as: "o", method: "GET", path: "/api/stats?days=90", advance: 30 * 60000 },
   { as: "o", method: "GET", path: "/api/export.csv?days=90" },
+  // hotspots, seasons and time of day (officers only; sample rows only on request)
+  { as: "g", method: "GET", path: "/api/stats/patterns" },
+  { as: "v", method: "GET", path: "/api/stats/patterns?sample=1" },
+  { as: "o", method: "GET", path: "/api/stats/patterns" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?sample=1" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?months=0&sample=1&cell_km=1" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?months=1&sample=1&cell_km=5" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?months=3&sample=0" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?cell_km=3" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?months=121" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?months=x" },
   { method: "POST", path: "/api/auth/register", body: { name: "Akum Jamir", phone: "9876543210", village: "Englan", pin: "2468" }, login: "n" },
   { method: "POST", path: "/api/auth/register", body: { name: "Akum Jamir", phone: "9876543210", village: "Englan", pin: "2468" } },
   { as: "n", method: "GET", path: "/api/overview", advance: 25 * H },
   ...media,
   { as: "o", method: "DELETE", path: "/api/sample" },
   { as: "o", method: "GET", path: "/api/stats?days=90" },
+  { as: "o", method: "GET", path: "/api/stats/patterns?sample=1&months=0" },
   { as: "v", method: "GET", path: "/api/incidents?mine=1&status=all" },
   { as: "n", method: "POST", path: "/api/auth/logout" },
   { as: "n", method: "GET", path: "/api/me" },
@@ -120,6 +135,8 @@ const strip = (v) => (Array.isArray(v) ? v.map(strip) : v && typeof v === "objec
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v);
 let bad = 0;
+const firstPost = S.findIndex((st) => st.method === "POST" && st.path === "/api/incidents");
+if (JSON.parse(py.results[firstPost].body).id !== NEW) { console.log(`The seed changed: set NEW to the first posted incident's id (${JSON.parse(py.results[firstPost].body).id})`); bad++; }
 S.forEach((step, k) => {
   now += step.advance || 0;
   const [p, q = ""] = step.path.split("?");

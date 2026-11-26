@@ -83,7 +83,7 @@ fun AdminScreen(st: AppState, vm: AppViewModel, section: AdminSection) {
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (s in AdminSection.entries) {
-                FilterChip(selected = s == section, onClick = { if (s != section) openAdmin(vm, s) }, label = { Text(s.label) })
+                FilterChip(selected = s == section, onClick = { if (s != section) openAdmin(vm, s) }, label = { Text(tr(s.label)) })
             }
         }
         when (section) {
@@ -97,10 +97,10 @@ fun AdminScreen(st: AppState, vm: AppViewModel, section: AdminSection) {
 }
 
 @Composable
-private fun Muted(text: String) = Text(text, style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted))
+private fun Muted(text: String) = Text(tr(text), style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted))
 
 @Composable
-private fun Loading(st: AppState) = Muted(if (st.isBusy) "Loading..." else "Nothing loaded yet. Tap refresh at the top.")
+private fun Loading(st: AppState) = Muted(if (st.isBusy) "Loading…" else "Nothing loaded yet. Tap refresh at the top.")
 
 private fun inr(v: Long) = "₹" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("en-IN")).format(v)
 
@@ -133,7 +133,7 @@ private fun StatsSection(st: AppState, vm: AppViewModel) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (d in listOf(7, 30, 90)) {
-                FilterChip(selected = a.statsDays == d, onClick = { vm.act { admin.loadStats(d) } }, label = { Text("$d days") })
+                FilterChip(selected = a.statsDays == d, onClick = { vm.act { admin.loadStats(d) } }, label = { Text(tr("$d days")) })
             }
         }
         OutlinedButton(enabled = !st.isBusy, onClick = {
@@ -151,7 +151,7 @@ private fun StatsSection(st: AppState, vm: AppViewModel) {
                     "Couldn't share the file."
                 }
             }
-        }) { Text("Export CSV") }
+        }) { Text(tr("Export CSV")) }
     }
     exportNote?.let { Muted(it) }
     if (s == null) return Loading(st)
@@ -162,16 +162,16 @@ private fun StatsSection(st: AppState, vm: AppViewModel) {
         Kpi("People hurt or killed", s.casualties.toString(), "${s.falseReports} false ${if (s.falseReports == 1) "report" else "reports"}")
         Kpi("Recorded losses", "${s.cropAcres} ac", "crops · ${inr(s.propertyInr)} property")
     }
-    Text("Incidents per day", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Incidents per day"), style = MaterialTheme.typography.titleMedium)
     DayBars(s.series.map { it.count })
     if (s.series.isNotEmpty()) {
         Row { Muted(s.series.first().date); Box(Modifier.weight(1f)); Muted(s.series.last().date) }
     }
-    Text("Hotspot villages", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Hotspot villages"), style = MaterialTheme.typography.titleMedium)
     if (s.byVillage.isEmpty()) Muted("No incidents in this period.") else HBars(s.byVillage.take(8))
-    Text("What happened", style = MaterialTheme.typography.titleMedium)
+    Text(tr("What happened"), style = MaterialTheme.typography.titleMedium)
     if (s.total == 0) Muted("No incidents in this period.") else HBars(s.byType.filter { it.count > 0 })
-    Text("Severity", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Severity"), style = MaterialTheme.typography.titleMedium)
     HBars(s.bySeverity)
     Muted("Export CSV shares the incidents of the chosen period as a spreadsheet file (e.g. to e-mail or Drive).")
 }
@@ -220,7 +220,7 @@ private fun HBars(rows: List<CountRow>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         for (r in rows) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(r.title, modifier = Modifier.width(130.dp), style = MaterialTheme.typography.bodySmall)
+                Text(tr(r.title), modifier = Modifier.width(130.dp), style = MaterialTheme.typography.bodySmall)
                 Box(Modifier.weight(1f).height(12.dp).background(argb(p.sunken), RoundedCornerShape(3.dp))) {
                     if (r.count > 0) Box(Modifier.fillMaxWidth(r.count.toFloat() / max).height(12.dp).background(argb(p.accent), RoundedCornerShape(3.dp)))
                 }
@@ -232,7 +232,6 @@ private fun HBars(rows: List<CountRow>) {
 
 // --- people ------------------------------------------------------------------------
 
-private val ROLE_LABELS = mapOf("villager" to "Villager", "guard" to "Forest guard", "officer" to "Forest officer")
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -248,25 +247,25 @@ private fun PeopleSection(st: AppState, vm: AppViewModel) {
     a.tempPin?.let { r ->
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = argb(LocalPalette.current.medSoft))) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Temporary PIN for ${r.user.name}", fontWeight = FontWeight.Bold)
+                Text("${tr("Temporary PIN for")} ${r.user.name}", fontWeight = FontWeight.Bold)
                 Text(r.tempPin, fontFamily = FontFamily.Monospace, fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                Text("Tell them in person or by phone call. They must choose a new PIN when they sign in. It isn't shown again.")
-                TextButton(onClick = { vm.controller.admin.dismissTempPin() }) { Text("Done") }
+                Text(tr("Tell them in person or by phone call. They must choose a new PIN when they sign in. It isn't shown again."))
+                TextButton(onClick = { vm.controller.admin.dismissTempPin() }) { Text(tr("Done")) }
             }
         }
     }
     OutlinedTextField(
         value = query, onValueChange = { query = it.take(40) }, singleLine = true,
-        label = { Text("Search name or phone") }, modifier = Modifier.fillMaxWidth(),
+        label = { Text(tr("Search name or phone")) }, modifier = Modifier.fillMaxWidth(),
     )
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FilterChip(selected = a.role.isEmpty(), onClick = { vm.act { admin.loadPeople(role = "") } }, label = { Text("Everyone") })
+        FilterChip(selected = a.role.isEmpty(), onClick = { vm.act { admin.loadPeople(role = "") } }, label = { Text(tr("Everyone")) })
         for (r in Role.entries) {
-            FilterChip(selected = a.role == r.key(), onClick = { vm.act { admin.loadPeople(role = r.key()) } }, label = { Text(ROLE_LABELS[r.key()] ?: r.key()) })
+            FilterChip(selected = a.role == r.key(), onClick = { vm.act { admin.loadPeople(role = r.key()) } }, label = { Text(tr(roleLabel(r.key()))) })
         }
     }
     if (a.people.isEmpty()) {
-        Muted(if (st.isBusy) "Loading..." else "No one found")
+        Muted(if (st.isBusy) "Loading…" else "No one found")
     }
     for (person in a.people) PersonCard(st, vm, person)
 }
@@ -282,7 +281,7 @@ private fun PersonCard(st: AppState, vm: AppViewModel, u: AdminUser) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(u.name, fontWeight = FontWeight.Bold)
-                Badge(ROLE_LABELS[u.role] ?: u.role, p.accent, p.accentSoft)
+                Badge(roleLabel(u.role), p.accent, p.accentSoft)
             }
             Text("${u.phone} · ${u.village}", style = MaterialTheme.typography.bodyMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -294,27 +293,27 @@ private fun PersonCard(st: AppState, vm: AppViewModel, u: AdminUser) {
             Muted("Last seen ${ago(u.lastSeen)}")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box {
-                    OutlinedButton(onClick = { roleMenu = true }, enabled = !st.isBusy) { Text("Role...") }
+                    OutlinedButton(onClick = { roleMenu = true }, enabled = !st.isBusy) { Text(tr("Role")) }
                     DropdownMenu(expanded = roleMenu, onDismissRequest = { roleMenu = false }) {
                         for (r in Role.entries) {
-                            DropdownMenuItem(text = { Text(ROLE_LABELS[r.key()] ?: r.key()) }, enabled = r.key() != u.role, onClick = {
+                            DropdownMenuItem(text = { Text(tr(roleLabel(r.key()))) }, enabled = r.key() != u.role, onClick = {
                                 roleMenu = false
-                                confirm = "Make ${u.name} a ${(ROLE_LABELS[r.key()] ?: r.key()).lowercase()}? They are signed out everywhere." to { admin.setRole(u.id, r) }
+                                confirm = "Make ${u.name} a ${(roleLabel(r.key())).lowercase()}? They are signed out everywhere." to { admin.setRole(u.id, r) }
                             })
                         }
                     }
                 }
                 OutlinedButton(onClick = {
                     confirm = "Give ${u.name} a temporary PIN? They are signed out everywhere and must choose a new PIN when they sign in." to { admin.resetPin(u.id) }
-                }, enabled = !st.isBusy) { Text("Reset PIN") }
-                if (u.failed24h > 0) OutlinedButton(onClick = { vm.act { admin.unlock(u.id) } }, enabled = !st.isBusy) { Text("Unlock") }
+                }, enabled = !st.isBusy) { Text(tr("Reset PIN")) }
+                if (u.failed24h > 0) OutlinedButton(onClick = { vm.act { admin.unlock(u.id) } }, enabled = !st.isBusy) { Text(tr("Unlock")) }
                 OutlinedButton(onClick = {
                     if (u.active) {
                         confirm = "Switch off ${u.name}'s account? They can't sign in until it is switched on again." to { admin.setActive(u.id, false) }
                     } else {
                         vm.act { admin.setActive(u.id, true) }
                     }
-                }, enabled = !st.isBusy) { Text(if (u.active) "Switch off" else "Switch on") }
+                }, enabled = !st.isBusy) { Text(tr(if (u.active) "Switch off" else "Switch on")) }
             }
         }
     }
@@ -326,9 +325,9 @@ private fun PersonCard(st: AppState, vm: AppViewModel, u: AdminUser) {
                 TextButton(onClick = {
                     confirm = null
                     vm.act { action() }
-                }) { Text("Yes") }
+                }) { Text(tr("Yes")) }
             },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirm = null }) { Text(tr("Cancel")) } },
         )
     }
 }
@@ -364,7 +363,7 @@ private fun VillagesSection(st: AppState, vm: AppViewModel) {
     if (a.unverifiedVillages > 0) {
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = argb(p.medSoft))) {
             Text(
-                "${plural(a.unverifiedVillages, "village position is", "village positions are")} not checked yet. Distances and alert areas depend on them.",
+                tr("${plural(a.unverifiedVillages, "village position is", "village positions are")} not checked yet. Distances and alert areas depend on them."),
                 modifier = Modifier.padding(12.dp),
             )
         }
@@ -372,7 +371,7 @@ private fun VillagesSection(st: AppState, vm: AppViewModel) {
     Button(onClick = {
         vm.controller.clearFieldErrors()
         adding = true
-    }) { Text("Add a village") }
+    }) { Text(tr("Add a village")) }
     if (a.villages.isEmpty()) Loading(st)
     for (v in a.villages) {
         Card(Modifier.fillMaxWidth()) {
@@ -389,13 +388,13 @@ private fun VillagesSection(st: AppState, vm: AppViewModel) {
                 TextButton(onClick = {
                     vm.controller.clearFieldErrors()
                     editing = v
-                }) { Text("Edit") }
+                }) { Text(tr("Edit")) }
             }
         }
     }
 
     HorizontalDivider()
-    Text("Import a list", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Import a list"), style = MaterialTheme.typography.titleMedium)
     Muted("Paste CSV with a header row name,lat,lng,source, or choose a file. Names already on the list get the new position; all imported positions count as checked.")
     OutlinedButton(onClick = {
         try {
@@ -403,11 +402,11 @@ private fun VillagesSection(st: AppState, vm: AppViewModel) {
         } catch (e: ActivityNotFoundException) {
             fileNote = "No file picker on this phone. Paste the list instead."
         }
-    }) { Text("Choose a file") }
+    }) { Text(tr("Choose a file")) }
     fileNote?.let { Muted(it) }
     FormField(st, "csv", "CSV", csv, { csv = it }, minLines = 4, hint = "name,lat,lng,source")
-    Button(onClick = { vm.act { if (admin.importVillages(csv) != null) csv = "" } }, enabled = !st.isBusy) { Text("Import") }
-    a.importNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    Button(onClick = { vm.act { if (admin.importVillages(csv) != null) csv = "" } }, enabled = !st.isBusy) { Text(tr("Import")) }
+    a.importNote?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall) }
 
     editing?.let { v -> VillageDialog(st, vm, v) { editing = null } }
     if (adding) VillageDialog(st, vm, null) { adding = false }
@@ -419,7 +418,7 @@ private fun VillageDialog(st: AppState, vm: AppViewModel, village: AdminVillage?
     var f by remember(village?.id) { mutableStateOf(village?.let { VillageForm.of(it) } ?: VillageForm()) }
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text(village?.name ?: "Add a village") },
+        title = { Text(village?.name ?: tr("Add a village")) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (village == null) FormField(st, "name", "Name", f.name, { f = f.copy(name = it.take(60)) })
@@ -437,9 +436,9 @@ private fun VillageDialog(st: AppState, vm: AppViewModel, village: AdminVillage?
                     val ok = if (village == null) admin.addVillage(f) else admin.saveVillage(village.id, f)
                     if (ok) onClose()
                 }
-            }) { Text(if (village == null) "Add village" else "Save") }
+            }) { Text(tr(if (village == null) "Add village" else "Save")) }
         },
-        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+        dismissButton = { TextButton(onClick = onClose) { Text(tr("Cancel")) } },
     )
 }
 
@@ -447,7 +446,7 @@ private fun VillageDialog(st: AppState, vm: AppViewModel, village: AdminVillage?
 private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = checked, onCheckedChange = onChange)
-        Text(label)
+        Text(tr(label))
     }
 }
 
@@ -460,13 +459,15 @@ private fun MessagesSection(st: AppState, vm: AppViewModel) {
     val p = LocalPalette.current
     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = argb(p.accentSoft))) {
         Text(
-            if (box.mode == "manual") "Text messages aren't connected to an SMS service yet. Send these from a phone, then mark them sent."
-            else "Alerts are texted automatically. Failed ones can be tried again.",
+            tr(
+                if (box.mode == "manual") "Text messages aren't connected to an SMS service yet. Send these from a phone, then mark them sent."
+                else "Alerts are texted automatically. Failed ones can be tried again.",
+            ),
             modifier = Modifier.padding(12.dp),
         )
     }
     if (box.batches.isEmpty()) {
-        Text("No alert messages yet", fontWeight = FontWeight.Bold)
+        Text(tr("No alert messages yet"), fontWeight = FontWeight.Bold)
         Muted("Each alert lists the people in those villages here.")
     }
     for (b in box.batches) BatchCard(st, vm, b, manualMode = box.mode == "manual")
@@ -480,17 +481,17 @@ private fun BatchCard(st: AppState, vm: AppViewModel, b: OutboxBatch, manualMode
     var open by rememberSaveable(b.alertId) { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("${b.levelLabel.ifEmpty { b.level }} · ${b.villages.joinToString()}", fontWeight = FontWeight.Bold)
+            Text("${tr(b.levelLabel.ifEmpty { b.level })} · ${b.villages.joinToString()}", fontWeight = FontWeight.Bold)
             Muted(istTime(b.sentAt))
             Text(b.text, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 for ((k, n) in b.counts) Badge("${messageStatusLabel(k)}: $n", p.ink, p.sunken)
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { copy(context, "Alert text", b.text) }) { Text("Copy message") }
-                OutlinedButton(onClick = { copy(context, "Phone numbers", b.recipients.joinToString { "+91" + it.phone }) }) { Text("Copy numbers") }
-                if ((b.counts["manual"] ?: 0) > 0) Button(onClick = { vm.act { admin.markSent(b) } }, enabled = !st.isBusy) { Text("Mark all sent") }
-                if ((b.counts["failed"] ?: 0) > 0 && !manualMode) OutlinedButton(onClick = { vm.act { admin.retryFailed(b) } }, enabled = !st.isBusy) { Text("Try failed again") }
+                OutlinedButton(onClick = { copy(context, "Alert text", b.text) }) { Text(tr("Copy message")) }
+                OutlinedButton(onClick = { copy(context, "Phone numbers", b.recipients.joinToString { "+91" + it.phone }) }) { Text(tr("Copy numbers")) }
+                if ((b.counts["manual"] ?: 0) > 0) Button(onClick = { vm.act { admin.markSent(b) } }, enabled = !st.isBusy) { Text(tr("Mark all sent")) }
+                if ((b.counts["failed"] ?: 0) > 0 && !manualMode) OutlinedButton(onClick = { vm.act { admin.retryFailed(b) } }, enabled = !st.isBusy) { Text(tr("Try failed again")) }
             }
             TextButton(onClick = { open = !open }) { Text((if (open) "Hide " else "Show ") + plural(b.recipients.size, "person", "people")) }
             if (open) {
@@ -498,7 +499,7 @@ private fun BatchCard(st: AppState, vm: AppViewModel, b: OutboxBatch, manualMode
                     Row {
                         Text("${r.name ?: "—"} · ${r.village.orEmpty()}", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
                         Text(r.phone, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(end = 6.dp))
-                        Text(messageStatusLabel(r.status), style = MaterialTheme.typography.bodySmall)
+                        Text(tr(messageStatusLabel(r.status)), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -512,32 +513,32 @@ private fun BatchCard(st: AppState, vm: AppViewModel, b: OutboxBatch, manualMode
 private fun SystemSection(st: AppState) {
     val s = st.admin.status ?: return Loading(st)
     val mb = { n: Long -> String.format(Locale.ROOT, "%.1f MB", n / 1e6) }
-    Text("Text messages", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Text messages"), style = MaterialTheme.typography.titleMedium)
     Text(
         if (s.sms.enabled) "Connected (${s.sms.mode}${if (s.sms.host.isNotEmpty()) ", ${s.sms.host}" else ""})."
-        else "Not connected. Alerts are listed under Messages for staff to send by hand, and sign-up codes are off.",
+        else tr("Not connected. Alerts are listed under Messages for staff to send by hand, and sign-up codes are off."),
     )
     Muted(if (s.outbox.isEmpty()) "No messages yet." else s.outbox.entries.joinToString(" · ") { (k, n) -> "$k: $n" })
     HorizontalDivider()
-    Text("Backups", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Backups"), style = MaterialTheme.typography.titleMedium)
     val bk = s.system.backups
     if (bk?.dir != null) {
         Text("Every ${bk.everyHours?.let { ReportDraft.plain(it) } ?: "?"} h to ${bk.dir}, keeping ${bk.keep ?: "?"}.")
         Muted((bk.lastAt?.let { "Last backup ${ago(it)}: ${bk.lastPath.orEmpty()}" } ?: "First backup is running.") + (bk.error?.let { " · Last error: $it" } ?: ""))
     } else {
-        Text("Automatic backups are off.")
+        Text(tr("Automatic backups are off."))
         Muted("Start the server with --backup-dir /path/to/backups, or run python -m hatialert backup on a schedule.")
     }
     HorizontalDivider()
-    Text("Storage", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Storage"), style = MaterialTheme.typography.titleMedium)
     for ((k, v) in listOf(
         "Database" to mb(s.storage.dbBytes), "Photos and voice" to mb(s.storage.mediaBytes),
         "People" to s.storage.users.toString(), "Incidents" to s.storage.incidents.toString(),
     )) {
-        Row { Text(k, modifier = Modifier.width(160.dp), color = argb(LocalPalette.current.muted)); Text(v) }
+        Row { Text(tr(k), modifier = Modifier.width(160.dp), color = argb(LocalPalette.current.muted)); Text(v) }
     }
     HorizontalDivider()
-    Text("Recent admin actions", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Recent admin actions"), style = MaterialTheme.typography.titleMedium)
     if (s.audit.isEmpty()) Muted("Nothing yet.")
     for (e in s.audit) {
         Column {

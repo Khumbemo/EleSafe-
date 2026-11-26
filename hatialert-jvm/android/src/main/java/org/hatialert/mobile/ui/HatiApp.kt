@@ -115,13 +115,13 @@ fun HatiApp(vm: AppViewModel) {
                 navigationIcon = {
                     if (back != null && back != Screen.Home) {
                         IconButton(onClick = { c.navigate(back) }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = tr("Back"))
                         }
                     }
                 },
                 actions = {
                     if (inApp && refresh != null) {
-                        IconButton(onClick = { vm.act(refresh) }) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
+                        IconButton(onClick = { vm.act(refresh) }) { Icon(Icons.Filled.Refresh, contentDescription = tr("Refresh")) }
                     }
                 },
             )
@@ -169,7 +169,7 @@ fun HatiApp(vm: AppViewModel) {
                             if (screen is Screen.CaseDetail) {
                                 Box(Modifier.align(Alignment.TopCenter).readable()) { CaseDetailScreen(st, vm) }
                             } else {
-                                Text("Choose a case to see its details.", modifier = Modifier.align(Alignment.Center).padding(24.dp), color = argb(LocalPalette.current.muted))
+                                Text(tr("Choose a case to see its details."), modifier = Modifier.align(Alignment.Center).padding(24.dp), color = argb(LocalPalette.current.muted))
                             }
                         }
                     }

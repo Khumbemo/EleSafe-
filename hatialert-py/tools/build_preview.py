@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from hatialert.api import App  # noqa: E402
 from hatialert.store import DEMO_ACCOUNTS, Store  # noqa: E402
 
-PY_MODULES = ["__init__.py", "domain.py", "security.py", "store.py", "api.py"]
+PY_MODULES = ["__init__.py", "domain.py", "geo.py", "security.py", "store.py", "api.py"]
 PYODIDE_FILES = ["pyodide.asm.mjs", "pyodide.asm.wasm", "pyodide-lock.json"]  # stdlib zip is inlined
 T = 1_800_000_000_000
 

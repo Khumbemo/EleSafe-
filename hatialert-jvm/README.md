@@ -193,7 +193,7 @@ A real deployment should run the server behind HTTPS (see the Python README) and
   **Warn nearby villages** fills it in from `/api/incidents/{id}/villages?km=5`, with the web app's wording
   ("About 6 elephants reported near Wozhuro... Keep away from the fields and stay indoors after dark."). After
   sending, the app says what happened to the texts: "Alert sent. Texting 4 people", or "... 4 people to text by
-  hand (Admin > Messages)" when the server has no SMS service.
+  hand (Admin › Messages)" when the server has no SMS service.
 - **Settings:** theme (Green follows the phone's light/dark mode; White, Dark and Navy are fixed; colours from
   `hatialert-py/hatialert/web/app.css`), **text me alerts** on/off, **change PIN** (current PIN, new PIN twice;
   other devices are signed out by the server), **sign out other devices** (after a confirmation), server address

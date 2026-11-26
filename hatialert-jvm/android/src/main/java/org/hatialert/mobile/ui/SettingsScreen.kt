@@ -52,17 +52,17 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
         st.user?.let { u ->
             Text(u.name, style = MaterialTheme.typography.titleMedium)
             Text("${u.role.replaceFirstChar { it.uppercase() }} · ${u.village} · ${u.phone}" + if (u.phoneVerified) "" else " (phone not verified)")
-            Text("Alert area: ${fmtKm(u.radiusKm)} km around ${u.village}", color = argb(p.muted))
+            Text(tr("Alert area: ${fmtKm(u.radiusKm)} km around ${u.village}"), color = argb(p.muted))
             if (u.roleEnum == Role.OFFICER) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { openAdmin(vm, AdminSection.STATS) }) { Text("District overview") }
-                    OutlinedButton(onClick = { openAdmin(vm, AdminSection.PEOPLE) }) { Text("Admin") }
+                    Button(onClick = { openAdmin(vm, AdminSection.STATS) }) { Text(tr("District overview")) }
+                    OutlinedButton(onClick = { openAdmin(vm, AdminSection.PEOPLE) }) { Text(tr("Admin")) }
                 }
             }
         }
         HorizontalDivider()
 
-        Text("Theme", style = MaterialTheme.typography.titleMedium)
+        Text(tr("Theme"), style = MaterialTheme.typography.titleMedium)
         for (t in ThemeChoice.entries) {
             Row(
                 Modifier.fillMaxWidth().clickable { c.setTheme(t) },
@@ -75,9 +75,9 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
         HorizontalDivider()
 
         st.user?.let { u ->
-            Text("Alerts", style = MaterialTheme.typography.titleMedium)
+            Text(tr("Alerts"), style = MaterialTheme.typography.titleMedium)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Text me alerts for ${u.village}", modifier = Modifier.weight(1f))
+                Text(tr("Text me alerts for ${u.village}"), modifier = Modifier.weight(1f))
                 Switch(checked = u.smsAlerts, onCheckedChange = { on -> vm.act { setSmsAlerts(on) } }, enabled = !st.isBusy)
             }
             Text(
@@ -90,37 +90,37 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
         PinChangeForm(st, vm, temp = false)
         HorizontalDivider()
 
-        Text("Signed-in devices", style = MaterialTheme.typography.titleMedium)
-        Text("Lost a phone, or signed in on someone else's? Sign out everywhere except here.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
-        OutlinedButton(onClick = { askLogoutAll = true }, enabled = !st.isBusy) { Text("Sign out other devices") }
+        Text(tr("Signed-in devices"), style = MaterialTheme.typography.titleMedium)
+        Text(tr("Lost a phone, or signed in on someone else's? Sign out everywhere except here."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+        OutlinedButton(onClick = { askLogoutAll = true }, enabled = !st.isBusy) { Text(tr("Sign out other devices")) }
         if (askLogoutAll) {
             AlertDialog(
                 onDismissRequest = { askLogoutAll = false },
-                title = { Text("Sign out other devices?") },
-                text = { Text("Every other phone and browser signed in to this account is signed out. This phone stays signed in.") },
+                title = { Text(tr("Sign out other devices?")) },
+                text = { Text(tr("Every other phone and browser signed in to this account is signed out. This phone stays signed in.")) },
                 confirmButton = {
                     TextButton(onClick = {
                         askLogoutAll = false
                         vm.act { signOutOtherDevices() }
-                    }) { Text("Sign them out") }
+                    }) { Text(tr("Sign them out")) }
                 },
-                dismissButton = { TextButton(onClick = { askLogoutAll = false }) { Text("Cancel") } },
+                dismissButton = { TextButton(onClick = { askLogoutAll = false }) { Text(tr("Cancel")) } },
             )
         }
         HorizontalDivider()
 
-        Text("Server", style = MaterialTheme.typography.titleMedium)
+        Text(tr("Server"), style = MaterialTheme.typography.titleMedium)
         ServerField(server, serverError, onChange = { server = it; serverError = null })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 serverError = c.setServerUrl(server)
                 if (serverError == null) vm.act { loadMeta() }
-            }, enabled = server.trim().trimEnd('/') != st.settings.serverUrl) { Text("Save (signs you out)") }
-            TextButton(onClick = { server = org.hatialert.client.app.Settings.DEFAULT_SERVER_URL; serverError = null }) { Text("Emulator default") }
+            }, enabled = server.trim().trimEnd('/') != st.settings.serverUrl) { Text(tr("Save (signs you out)")) }
+            TextButton(onClick = { server = org.hatialert.client.app.Settings.DEFAULT_SERVER_URL; serverError = null }) { Text(tr("Emulator default")) }
         }
         HorizontalDivider()
 
-        Text("Emergency numbers", style = MaterialTheme.typography.titleMedium)
+        Text(tr("Emergency numbers"), style = MaterialTheme.typography.titleMedium)
         for (k in Contacts.LIST) {
             Row(
                 Modifier.fillMaxWidth().clickable {
@@ -144,7 +144,7 @@ fun SettingsScreen(st: AppState, vm: AppViewModel) {
                 "Times are Indian Standard Time.",
             style = MaterialTheme.typography.bodySmall, color = argb(p.muted),
         )
-        Button(onClick = { vm.act { signOut() } }, modifier = Modifier.fillMaxWidth()) { Text("Sign out") }
+        Button(onClick = { vm.act { signOut() } }, modifier = Modifier.fillMaxWidth()) { Text(tr("Sign out")) }
     }
 }
 

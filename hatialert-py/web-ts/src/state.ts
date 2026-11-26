@@ -1,5 +1,5 @@
 /* What the client keeps in memory while it runs. */
-import type { AlertPrefill, Meta, User } from "./types";
+import type { AlertPrefill, IncidentType, Meta, User } from "./types";
 
 export type CasesFilter = "open" | "closed" | "all";
 
@@ -13,6 +13,11 @@ export const state = {
   casesFilter: "open" as CasesFilter,
   casesVillage: "",
   days: 30,
+  /** District overview patterns: months back (0 = all time), type filter
+      ("" = all), and sample data (null = only when there is nothing else). */
+  patternMonths: 12,
+  patternType: "" as IncidentType | "",
+  patternSample: null as boolean | null,
   /** When the network went away, or null when online. */
   offlineSince: null as number | null,
 };

@@ -42,10 +42,10 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
         Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Elephant incident reporting for the villages around Wokha.", style = MaterialTheme.typography.bodyLarge)
+        Text(tr("Elephant incident reporting for the villages around Wokha."), style = MaterialTheme.typography.bodyLarge)
         OutlinedTextField(
             value = phone, onValueChange = { phone = it },
-            label = { Text("Mobile number") }, singleLine = true,
+            label = { Text(tr("Mobile number")) }, singleLine = true,
             isError = st.fieldErrors.containsKey("phone"),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             modifier = Modifier.fillMaxWidth(),
@@ -53,7 +53,7 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
         FieldError(st.fieldErrors, "phone")
         OutlinedTextField(
             value = pin, onValueChange = { v -> pin = v.filter { it.isDigit() }.take(6) },
-            label = { Text("PIN") }, singleLine = true,
+            label = { Text(tr("PIN")) }, singleLine = true,
             isError = st.fieldErrors.containsKey("pin"),
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
@@ -61,22 +61,22 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
         )
         FieldError(st.fieldErrors, "pin")
         Button(onClick = { vm.act { signIn(phone, pin) } }, enabled = !st.isBusy, modifier = Modifier.fillMaxWidth()) {
-            Text("Sign in")
+            Text(tr("Sign in"))
         }
         Row {
-            TextButton(onClick = { open(vm, Screen.Register) }) { Text("Create an account") }
+            TextButton(onClick = { open(vm, Screen.Register) }) { Text(tr("Create an account")) }
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { open(vm, Screen.ForgotPin) }) { Text("Forgot your PIN?") }
+            TextButton(onClick = { open(vm, Screen.ForgotPin) }) { Text(tr("Forgot your PIN?")) }
         }
 
         val demo = st.meta?.demoAccounts.orEmpty()
         if (demo.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
-            Text("Demo accounts on this server (tap to fill in):", style = MaterialTheme.typography.titleSmall)
+            Text(tr("Demo accounts on this server (tap to fill in):"), style = MaterialTheme.typography.titleSmall)
             for (a in demo) {
                 Card(Modifier.fillMaxWidth().clickable { phone = a.phone; pin = a.pin }) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("${a.name} (${a.role}, ${a.village})", style = MaterialTheme.typography.bodyMedium)
+                        Text("${a.name} (${tr(roleLabel(a.role))}, ${a.village})", style = MaterialTheme.typography.bodyMedium)
                         Text("${a.phone} / PIN ${a.pin}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -86,8 +86,8 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
         Spacer(Modifier.height(8.dp))
         if (!editServer) {
             Row {
-                Text("Server: ${st.settings.serverUrl}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
-                TextButton(onClick = { server = st.settings.serverUrl; editServer = true }) { Text("Change") }
+                Text("${tr("Server")}: ${st.settings.serverUrl}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(top = 12.dp))
+                TextButton(onClick = { server = st.settings.serverUrl; editServer = true }) { Text(tr("Change")) }
             }
         } else {
             ServerField(server, serverError, onChange = { server = it; serverError = null })
@@ -98,8 +98,8 @@ fun SignInScreen(st: AppState, vm: AppViewModel) {
                         editServer = false
                         vm.act { loadMeta() }
                     }
-                }) { Text("Use this server") }
-                TextButton(onClick = { editServer = false }) { Text("Cancel") }
+                }) { Text(tr("Use this server")) }
+                TextButton(onClick = { editServer = false }) { Text(tr("Cancel")) }
             }
         }
     }
@@ -115,10 +115,10 @@ private fun open(vm: AppViewModel, screen: Screen) {
 fun ServerField(value: String, error: String?, onChange: (String) -> Unit) {
     OutlinedTextField(
         value = value, onValueChange = onChange, singleLine = true,
-        label = { Text("Server address") },
+        label = { Text(tr("Server address")) },
         isError = error != null,
         supportingText = {
-            Text(error ?: "Emulator: http://10.0.2.2:8000. A phone on Wi-Fi: http://<laptop address>:8000 (debug builds only).")
+            Text(tr(error ?: "Emulator: http://10.0.2.2:8000. A phone on Wi-Fi: http://<laptop address>:8000 (debug builds only)."))
         },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
         modifier = Modifier.fillMaxWidth(),

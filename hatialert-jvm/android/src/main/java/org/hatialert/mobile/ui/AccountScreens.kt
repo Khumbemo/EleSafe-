@@ -48,10 +48,10 @@ fun FormField(
 ) {
     val error = st.fieldErrors[field]
     OutlinedTextField(
-        value = value, onValueChange = onChange, label = { Text(label) },
+        value = value, onValueChange = onChange, label = { Text(tr(label)) },
         singleLine = minLines == 1, minLines = minLines,
         isError = error != null,
-        supportingText = (error ?: hint)?.let { t -> { Text(t) } },
+        supportingText = (error ?: hint)?.let { t -> { Text(tr(t)) } },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
         modifier = Modifier.fillMaxWidth(),
@@ -70,10 +70,10 @@ fun PinFields(st: AppState, pin: String, pin2: String, onPin: (String) -> Unit, 
 @Composable
 private fun CodeRequest(st: AppState, vm: AppViewModel, phone: String, purpose: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("We text a 6-digit code to check the number is yours.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-        OutlinedButton(onClick = { vm.act { requestCode(phone, purpose) } }, enabled = !st.isBusy) { Text("Send code") }
+        Text(tr("We text a 6-digit code to check the number is yours."), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = { vm.act { requestCode(phone, purpose) } }, enabled = !st.isBusy) { Text(tr("Send code")) }
     }
-    st.authNote?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+    st.authNote?.let { Text(tr(it), style = MaterialTheme.typography.bodyMedium) }
 }
 
 @Composable
@@ -81,7 +81,7 @@ private fun VillageChoice(st: AppState, selected: String?, onSelect: (String) ->
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(selected?.let { "Village: $it" } ?: "Choose your village")
+            Text(selected?.let { "${tr("Village")}: $it" } ?: tr("Choose your village"))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             for (v in st.villages) {
@@ -107,7 +107,7 @@ fun RegisterScreen(st: AppState, vm: AppViewModel) {
     val sms = st.meta?.smsEnabled == true
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("Your village sets which warnings you get.", style = MaterialTheme.typography.bodyLarge)
+        Text(tr("Your village sets which warnings you get."), style = MaterialTheme.typography.bodyLarge)
         FormField(st, "name", "Full name", name, { name = it.take(60) })
         FormField(st, "phone", "Mobile number", phone, { phone = it.take(16) }, KeyboardType.Phone)
         if (sms) {
@@ -119,7 +119,7 @@ fun RegisterScreen(st: AppState, vm: AppViewModel) {
         Button(
             onClick = { vm.act { register(name, phone, village, pin, pin2, code.takeIf { sms }) } },
             enabled = !st.isBusy, modifier = Modifier.fillMaxWidth(),
-        ) { Text("Create account") }
+        ) { Text(tr("Create account")) }
         Text(
             "New accounts start as villagers. Forest staff accounts are set up by the forest office.",
             style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted),
@@ -140,19 +140,19 @@ fun ForgotPinScreen(st: AppState, vm: AppViewModel) {
         if (st.meta?.smsEnabled != true) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Ask a forest officer or forest guard to reset your PIN. They will give you a temporary PIN, and you choose a new one when you sign in.")
-                    Text("Text-message codes aren't set up on this server yet.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+                    Text(tr("Ask a forest officer or forest guard to reset your PIN. They will give you a temporary PIN, and you choose a new one when you sign in."))
+                    Text(tr("Text-message codes aren't set up on this server yet."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
                 }
             }
             return@Column
         }
-        Text("We'll text you a code, then you choose a new PIN.", color = argb(p.muted))
+        Text(tr("We'll text you a code, then you choose a new PIN."), color = argb(p.muted))
         FormField(st, "phone", "Mobile number", phone, { phone = it.take(16) }, KeyboardType.Phone)
         CodeRequest(st, vm, phone, "reset")
         FormField(st, "code", "Code from the text message", code, { code = digits(it) }, KeyboardType.Number)
         PinFields(st, pin, pin2, { pin = it }, { pin2 = it })
         Button(onClick = { vm.act { resetPin(phone, code, pin, pin2) } }, enabled = !st.isBusy, modifier = Modifier.fillMaxWidth()) {
-            Text("Save new PIN")
+            Text(tr("Save new PIN"))
         }
     }
 }
@@ -164,8 +164,8 @@ fun PinChangeForm(st: AppState, vm: AppViewModel, temp: Boolean) {
     var pin by rememberSaveable { mutableStateOf("") }
     var pin2 by rememberSaveable { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(if (temp) "Choose your own PIN" else "Change PIN", style = MaterialTheme.typography.titleMedium)
-        if (temp) Text("You signed in with a temporary PIN. Choose a new one that only you know.")
+        Text(tr(if (temp) "Choose your own PIN" else "Change PIN"), style = MaterialTheme.typography.titleMedium)
+        if (temp) Text(tr("You signed in with a temporary PIN. Choose a new one that only you know."))
         FormField(st, "old_pin", if (temp) "Temporary PIN" else "Current PIN", old, { old = digits(it) }, KeyboardType.NumberPassword, secret = true)
         PinFields(st, pin, pin2, { pin = it }, { pin2 = it })
         Button(onClick = {
@@ -176,7 +176,7 @@ fun PinChangeForm(st: AppState, vm: AppViewModel, temp: Boolean) {
                     pin2 = ""
                 }
             }
-        }, enabled = !st.isBusy) { Text("Save new PIN") }
+        }, enabled = !st.isBusy) { Text(tr("Save new PIN")) }
     }
 }
 
@@ -185,6 +185,6 @@ fun PinChangeForm(st: AppState, vm: AppViewModel, temp: Boolean) {
 fun NewPinScreen(st: AppState, vm: AppViewModel) {
     Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         PinChangeForm(st, vm, temp = true)
-        TextButton(onClick = { vm.act { signOut() } }) { Text("Sign out") }
+        TextButton(onClick = { vm.act { signOut() } }) { Text(tr("Sign out")) }
     }
 }

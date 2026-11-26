@@ -93,10 +93,10 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
 
     Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         st.pendingNote?.let { note -> PendingNote(note) { vm.act { flushOutbox() } } }
-        Text("What happened?", style = MaterialTheme.typography.titleMedium)
+        Text(tr("What happened?"), style = MaterialTheme.typography.titleMedium)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (t in IncidentType.entries) {
-                FilterChip(selected = d.type == t, onClick = { c.editDraft { it.copy(type = t) } }, label = { Text(t.label()) })
+                FilterChip(selected = d.type == t, onClick = { c.editDraft { it.copy(type = t) } }, label = { Text(tr(t.label())) })
             }
         }
         FieldError(err, "type")
@@ -104,38 +104,38 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(
                 value = d.herdSize, onValueChange = { v -> c.editDraft { it.copy(herdSize = v.filter(Char::isDigit).take(3)) } },
-                label = { Text("How many elephants") }, singleLine = true, isError = err.containsKey("herd_size"),
+                label = { Text(tr("How many elephants?")) }, singleLine = true, isError = err.containsKey("herd_size"),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
             )
             if (d.type?.isCasualty == true) {
                 OutlinedTextField(
                     value = d.casualties, onValueChange = { v -> c.editDraft { it.copy(casualties = v.filter(Char::isDigit).take(2)) } },
-                    label = { Text("People hurt") }, singleLine = true, isError = err.containsKey("casualties"),
+                    label = { Text(tr("People hurt")) }, singleLine = true, isError = err.containsKey("casualties"),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.weight(1f),
                 )
             }
         }
         FieldError(err, "herd_size", "casualties")
 
-        Text("Where?", style = MaterialTheme.typography.titleMedium)
+        Text(tr("Where?"), style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !d.useGps, onClick = { c.editDraft { it.copy(useGps = false) } }, label = { Text("Distance from a village") })
+            FilterChip(selected = !d.useGps, onClick = { c.editDraft { it.copy(useGps = false) } }, label = { Text(tr("Distance from a village")) })
             FilterChip(selected = d.useGps, onClick = {
                 c.editDraft { it.copy(useGps = true) }
                 if (d.gps == null && !gpsBusy) {
                     if (Gps.hasPermission(context)) locate() else permissions.launch(Gps.PERMISSIONS)
                 }
-            }, label = { Text("My GPS position") })
+            }, label = { Text(tr("My GPS position")) })
         }
         VillagePicker(st, d.village) { v -> c.editDraft { it.copy(village = v) } }
         FieldError(err, "village")
         if (!d.useGps) {
             OutlinedTextField(
                 value = d.offsetKm, onValueChange = { v -> c.editDraft { it.copy(offsetKm = v.filter { ch -> ch.isDigit() || ch == '.' }.take(5)) } },
-                label = { Text("Distance from the village (km)") }, singleLine = true, isError = err.containsKey("offset_km"),
+                label = { Text(tr("Distance from the village (km)")) }, singleLine = true, isError = err.containsKey("offset_km"),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth(),
             )
-            Text("Which way from the village?", style = MaterialTheme.typography.bodyMedium)
+            Text(tr("Direction from the village"), style = MaterialTheme.typography.bodyMedium)
             DirectionChips(d.offsetDir, none = "At the village") { dir -> c.editDraft { it.copy(offsetDir = dir) } }
             FieldError(err, "offset_km", "offset_dir")
         } else {
@@ -150,23 +150,23 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
                 )
             }
             TextButton(enabled = !gpsBusy, onClick = { if (Gps.hasPermission(context)) locate() else permissions.launch(Gps.PERMISSIONS) }) {
-                Text(if (g == null) "Get my position" else "Update my position")
+                Text(tr(if (g == null) "Get my position" else "Update my position"))
             }
             FieldError(err, "lat", "lng")
         }
-        gpsNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
+        gpsNote?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
 
-        Text("Which way is the herd heading?", style = MaterialTheme.typography.bodyMedium)
-        DirectionChips(d.heading, none = "Not sure") { dir -> c.editDraft { it.copy(heading = dir) } }
+        Text(tr("Which way are they moving?"), style = MaterialTheme.typography.bodyMedium)
+        DirectionChips(d.heading, none = "Not moving / not sure") { dir -> c.editDraft { it.copy(heading = dir) } }
 
         OutlinedTextField(
             value = d.description, onValueChange = { v -> c.editDraft { it.copy(description = v.take(500)) } },
-            label = { Text("Notes (what you saw, damage)") }, minLines = 3, isError = err.containsKey("description"),
+            label = { Text(tr("Notes (what you saw, damage)")) }, minLines = 3, isError = err.containsKey("description"),
             modifier = Modifier.fillMaxWidth(),
         )
         FieldError(err, "description")
 
-        Text("Photos (${d.photos.size} of ${MediaKind.PHOTO.maxCount()})", style = MaterialTheme.typography.bodyMedium)
+        Text(tr("Photos (${d.photos.size} of ${MediaKind.PHOTO.maxCount()})"), style = MaterialTheme.typography.bodyMedium)
         if (d.photos.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 d.photos.forEachIndexed { index, bytes ->
@@ -174,23 +174,23 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
                     Column {
                         Box(Modifier.size(88.dp)) {
                             if (thumb != null) {
-                                Image(thumb.asImageBitmap(), contentDescription = "Photo ${index + 1}", contentScale = ContentScale.Crop, modifier = Modifier.size(88.dp))
+                                Image(thumb.asImageBitmap(), contentDescription = tr("Photo ${index + 1}"), contentScale = ContentScale.Crop, modifier = Modifier.size(88.dp))
                             }
                         }
-                        TextButton(onClick = { c.editDraft { it.copy(photos = it.photos.filterIndexed { i, _ -> i != index }) } }) { Text("Remove") }
+                        TextButton(onClick = { c.editDraft { it.copy(photos = it.photos.filterIndexed { i, _ -> i != index }) } }) { Text(tr("Remove")) }
                     }
                 }
             }
         }
-        OutlinedButton(enabled = d.photos.size < MediaKind.PHOTO.maxCount(), onClick = takePhoto) { Text("Take a photo") }
+        OutlinedButton(enabled = d.photos.size < MediaKind.PHOTO.maxCount(), onClick = takePhoto) { Text(tr("Take photo")) }
 
-        Text("Voice notes (${d.voices.size} of ${MediaKind.VOICE.maxCount()}, up to ${MediaKind.VOICE_MAX_SECONDS} s each)", style = MaterialTheme.typography.bodyMedium)
+        Text(tr("Voice notes (${d.voices.size} of ${MediaKind.VOICE.maxCount()}, up to ${MediaKind.VOICE_MAX_SECONDS} s each)"), style = MaterialTheme.typography.bodyMedium)
         d.voices.forEachIndexed { index, bytes ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     VoicePlayButton(bytes, "audio/mp4", "Voice note ${index + 1} · ${kb(bytes.size.toLong())}") { bytes }
                 }
-                TextButton(onClick = { c.editDraft { it.copy(voices = it.voices.filterIndexed { i, _ -> i != index }) } }) { Text("Remove") }
+                TextButton(onClick = { c.editDraft { it.copy(voices = it.voices.filterIndexed { i, _ -> i != index }) } }) { Text(tr("Remove")) }
             }
         }
         VoiceRecordButton(
@@ -198,20 +198,20 @@ fun ReportScreen(st: AppState, vm: AppViewModel) {
             onDone = { bytes -> c.editDraft { it.copy(voices = it.voices + bytes) } },
             onError = { mediaNote = it },
         )
-        mediaNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
+        mediaNote?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall, color = argb(p.muted)) }
         FieldError(err, "attachments")
 
         d.severityPreview()?.let { s ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Severity:", fontWeight = FontWeight.Bold)
+                Text(tr("Severity"), fontWeight = FontWeight.Bold)
                 SeverityBadge(s.key(), s.label())
             }
         }
         Button(onClick = { vm.act { submitReport() } }, enabled = !st.isBusy, modifier = Modifier.fillMaxWidth()) {
-            Text("Send report")
+            Text(tr("Send report"))
         }
-        Text("No signal? Send anyway: the report is kept on this phone and goes out when you're back online.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
-        Text("In danger now? Move away first, then call 112.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+        Text(tr("No signal? Send anyway: the report is kept on this phone and goes out when you're back online."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+        Text(tr("In danger now? Move away first, then call 112."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
     }
 }
 
@@ -220,12 +220,12 @@ private fun VillagePicker(st: AppState, selected: String?, onSelect: (String) ->
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(selected?.let { "Nearest village: $it" } ?: "Choose the nearest village")
+            Text(selected?.let { "${tr("Nearest village")}: $it" } ?: tr("Choose the nearest village"))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             for (v in st.villages) {
                 DropdownMenuItem(
-                    text = { Text(if (v.verified) v.name else "${v.name} (position not verified)") },
+                    text = { Text(if (v.verified) v.name else tr("${v.name}: position not verified")) },
                     onClick = {
                         onSelect(v.name)
                         open = false

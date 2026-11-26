@@ -38,12 +38,12 @@ fun CasesScreen(st: AppState, onOpen: (Long) -> Unit) {
                         Text(i.ref, fontWeight = FontWeight.Bold)
                         SeverityBadge(i.severity, i.severityLabel)
                         Text(
-                            i.statusLabel,
+                            tr(i.statusLabel),
                             color = if (i.open) argb(p.accent) else argb(p.muted),
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
-                    Text("${i.typeLabel} · ${i.village}", style = MaterialTheme.typography.bodyMedium)
+                    Text("${tr(i.typeLabel)} · ${i.village}", style = MaterialTheme.typography.bodyMedium)
                     Text(istTime(i.createdAt), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
                 }
             }

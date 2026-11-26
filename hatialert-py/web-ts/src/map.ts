@@ -6,7 +6,7 @@
 import { $, $$, $maybe, type Child, h, s } from "./dom";
 import { destination, type Km, utmKm } from "./geo";
 import { state } from "./state";
-import type { Incident } from "./types";
+import type { GridCell, Incident } from "./types";
 import { ago } from "./util";
 
 /** map/layers.json as written by tools/build_map.py. Paths are packed as
@@ -42,7 +42,17 @@ export interface MapOptions {
   radius?: number;
   /** Incident id to zoom to. */
   focus?: number | null;
+  /** Hotspot layer: grid squares shaded by score (District overview). */
+  cells?: GridCell[];
+  /** Side of a grid square in km. */
+  cellKm?: number;
+  /** Name of the map picture for screen readers. */
+  label?: string;
 }
+
+/** Shade 1-5 of the sequential hotspot palette (--heat1..5 in app.css)
+    for a score, relative to the largest; 0 for nothing. */
+export const heatLevel = (score: number, max: number): number => (score > 0 && max > 0 ? Math.min(5, Math.max(1, Math.ceil((5 * score) / max))) : 0);
 
 let layersP: Promise<Layers | null> | null = null;
 function loadLayers(): Promise<Layers | null> {
@@ -85,22 +95,24 @@ export function mapBlock(opts: MapOptions): HTMLDivElement {
   const id = "m" + ++mapSeq;
   const box = h("div", { class: "mapbox", "data-map": id },
     h("div", { class: "mapframe", tabindex: 0, "aria-label": "Map of Wokha district. Use plus and minus keys to zoom, arrow keys to move." },
-      s("svg", { class: "map", role: "img", "aria-label": "Map of villages and open incidents" }),
+      s("svg", { class: "map", role: "img", "aria-label": opts.label || "Map of villages and open incidents" }),
       h("div", { class: "mapctl" },
         h("button", { type: "button", "data-z": "in", "aria-label": "Zoom in" }, "+"),
         h("button", { type: "button", "data-z": "out", "aria-label": "Zoom out" }, "−"),
         h("button", { type: "button", "data-z": "fit", "aria-label": "Fit to area" }, "⤢")),
       h("div", { class: "scalebar", "aria-hidden": "true" }, h("i"), h("span"))),
-    mapLegend(opts.radius));
+    mapLegend(opts));
   loadLayers().then((L) => { if (box.isConnected) drawMap(box, opts, L); });
   return box;
 }
 
-function mapLegend(radius: number | undefined): Child[] {
+function mapLegend({ radius, cells, cellKm = 1, incidents }: MapOptions): Child[] {
   const key = (cls: string, label: string) => h("span", null, h("i", { class: cls }), label);
+  const heat = !!cells && cells.length > 0;
   return [
     h("div", { class: "legend" },
-      key("dotk critical", "Critical"), key("dotk high", "High"), key("dotk medium", "Medium"), key("dotk low", "Low"),
+      heat && h("span", { class: "heatkey" }, `${cellKm} km squares: fewer`, [1, 2, 3, 4, 5].map((k) => h("i", { class: `hk heat${k}` })), "more"),
+      (!heat || (incidents && incidents.length > 0)) && [key("dotk critical", "Critical"), key("dotk high", "High"), key("dotk medium", "Medium"), key("dotk low", "Low")],
       key("vk", "Village"), key("vk unv", "Village, position not verified"),
       radius ? key("lk ring", `Your ${radius} km alert area`) : null,
       key("lk water", "Stream"), key("lk ct", "Contour, 100 m"), key("lk dist", "District boundary")),
@@ -110,7 +122,7 @@ function mapLegend(radius: number | undefined): Child[] {
 
 interface View { x: number; y: number; w: number }
 
-function drawMap(box: HTMLElement, { incidents = [], home, radius = 0, focus = null }: MapOptions, L: Layers | null): void {
+function drawMap(box: HTMLElement, { incidents = [], home, radius = 0, focus = null, cells = [], cellKm = 1 }: MapOptions, L: Layers | null): void {
   const svg = $<SVGSVGElement>("svg", box), frame = $(".mapframe", box);
   const V = state.meta.villages;
   const vp = V.map((v) => utmKm(v.lat, v.lng));
@@ -135,6 +147,13 @@ function drawMap(box: HTMLElement, { incidents = [], home, radius = 0, focus = n
     for (const [o, d] of Object.entries(L.streams)) base.push(s("path", { class: `water o${o}`, d }));
     for (const d of L.districts) if (d.name !== "Wokha") base.push(s("path", { class: `dist ${d.state === "Assam" ? "assam" : ""}`, d: d.d }));
     if (wokha) base.push(s("path", { class: "dist wokha", d: wokha.d }));
+  }
+  if (cells.length) {
+    // Hotspot squares, under the grid lines so the km grid still reads.
+    const max = Math.max(...cells.map((c) => c.score));
+    base.push(s("g", { class: "cells", "aria-hidden": "true" }, cells.map((c) => s("rect", {
+      class: `cell heat${heatLevel(c.score, max)}`, x: f2(c.e - e0), y: f2(n1 - c.n - cellKm), width: cellKm, height: cellKm,
+    }))));
   }
   const gridG = s("g", { class: "grid" });
   base.push(gridG);
@@ -201,7 +220,7 @@ function drawMap(box: HTMLElement, { incidents = [], home, radius = 0, focus = n
   let raf = 0;
   const aspect = () => (frame.clientHeight || 300) / (frame.clientWidth || 400);
   function fit() {
-    const pts: Km[] = [...(incidents.length ? ip : []), ...(hv ? [utmKm(hv.lat, hv.lng)] : [])];
+    const pts: Km[] = [...(incidents.length ? ip : []), ...cells.flatMap((c): Km[] => [[c.e, c.n], [c.e + cellKm, c.n + cellKm]]), ...(hv ? [utmKm(hv.lat, hv.lng)] : [])];
     if (hv && radius) { const c = utmKm(hv.lat, hv.lng); pts.push([c[0] - radius, c[1] - radius], [c[0] + radius, c[1] + radius]); }
     if (!pts.length || (focus && ip.length === 1 && !radius)) pts.push(...(focus ? [[ip[0][0] - 4, ip[0][1] - 4], [ip[0][0] + 4, ip[0][1] + 4]] as Km[] : vp));
     const xs = pts.map(X), ys = pts.map(Y);

@@ -63,6 +63,26 @@ function createFallbackEngine(SEED, opts = {}) {
     const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
     return [round(deg(p2), 5), round(deg(l2), 5)];
   }
+  // geo.utm (WGS 84 -> UTM zone 46N, metres), term for term as in geo.py
+  const utm = (() => {
+    const f = 1 / 298.257223563, n = f / (2 - f), A = 6378137.0 / (1 + n) * (1 + n ** 2 / 4 + n ** 4 / 64);
+    const AL = [n / 2 - 2 * n ** 2 / 3 + 5 * n ** 3 / 16, 13 * n ** 2 / 48 - 3 * n ** 3 / 5, 61 * n ** 3 / 240];
+    const C = 2 * Math.sqrt(n) / (1 + n), rd = (d) => d * (Math.PI / 180); // math.radians
+    return (lat, lon) => {
+      const phi = rd(lat), dl = rd(lon - 93.0);
+      const t = Math.sinh(Math.atanh(Math.sin(phi)) - C * Math.atanh(C * Math.sin(phi)));
+      const xi = Math.atan2(t, Math.cos(dl)), eta = Math.atanh(Math.sin(dl) / Math.sqrt(1 + t * t));
+      let se = 0, sn = 0;
+      AL.forEach((a, j) => { se += a * Math.cos(2 * (j + 1) * xi) * Math.sinh(2 * (j + 1) * eta); sn += a * Math.sin(2 * (j + 1) * xi) * Math.cosh(2 * (j + 1) * eta); });
+      return [500000.0 + 0.9996 * A * (eta + se), 0.0 + 0.9996 * A * (xi + sn)];
+    };
+  })();
+  const floorDiv = (x, w) => Math.floor((x - (x % w)) / w); // Python float //
+  // domain.SEVERITY_WEIGHT, NIGHT_*, GRID_CELL_KM, ist_month_hour, ist_month_start
+  const WEIGHT = { critical: 4, high: 3, medium: 2, low: 1 }, NIGHT_FROM = 18, NIGHT_TO = 6, CELLS_KM = [1, 2, 5];
+  const istParts = (ms) => { const d = new Date(Math.floor(ms / 1000) * 1000 + 5.5 * HOUR); return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCHours()]; };
+  const isNight = (hr) => hr >= NIGHT_FROM || hr < NIGHT_TO;
+  const istMonthStart = (ms, back) => { const [y, m] = istParts(ms), k = y * 12 + m - 1 - back; return Date.UTC(Math.floor(k / 12), ((k % 12) + 12) % 12, 1) - 5.5 * HOUR; };
   const ist = (ms) => new Date(ms + 5.5 * HOUR).toISOString();
   const istDate = (ms) => ist(ms).slice(0, 10);
   const istStamp = (ms) => ist(ms).slice(0, 16).replace("T", " ");
@@ -390,6 +410,46 @@ function createFallbackEngine(SEED, opts = {}) {
         by_village: Object.entries(byV).sort((a, c) => c[1] - a[1] || (a[0] < c[0] ? -1 : 1)).map(([name, n]) => ({ name, count: n })),
         series: Array.from({ length: days }, (_, k) => istDate(end - (days - 1 - k) * DAY)).map((d) => ({ date: d, count: ser[d] || 0 })),
         crop_acres: round(rows.reduce((s, r) => s + r.crop_acres, 0), 2), property_inr: rows.reduce((s, r) => s + r.property_inr, 0), casualties: rows.reduce((s, r) => s + r.casualties, 0),
+      };
+    }],
+    ["GET", /^\/api\/stats\/patterns$/, "officer", (u, b, q) => {
+      const months = num(q, "months", "int", 0, 120, 12), cell = num(q, "cell_km", "int", 1, 5, 2);
+      if (!CELLS_KM.includes(cell)) throw new E(400, "Choose a square size of 1, 2 or 5 km.", "cell_km");
+      const includeSample = q.sample === "1", now = clock(), since = months ? istMonthStart(now, months - 1) : null;
+      const all = db.incidents.filter((i) => since === null || i.created_at >= since).sort((a, c) => a.created_at - c.created_at || a.id - c.id);
+      const rows = [];
+      let sampleN = 0, falseN = 0;
+      for (const r of all) {
+        if (r.status === "false_report") { if (!r.sample || includeSample) falseN++; continue; }
+        if (r.sample) { sampleN++; if (!includeSample) continue; }
+        rows.push(r);
+      }
+      const types = M.types.map((t) => t.key), zero = () => Object.fromEntries(types.map((k) => [k, 0]));
+      const villages = new Map(), cells = new Map();
+      const byMonth = Array.from({ length: 12 }, (_, k) => ({ month: k + 1, count: 0, types: zero() }));
+      const byHour = Array.from({ length: 24 }, (_, k) => ({ hour: k, count: 0, types: zero() }));
+      let night = 0;
+      for (const r of rows) {
+        const [, month, hr] = istParts(r.created_at), w = WEIGHT[r.severity];
+        if (!villages.has(r.village)) villages.set(r.village, { name: r.village, count: 0, score: 0, night: 0, types: zero(), last_at: 0 });
+        const v = villages.get(r.village);
+        v.count++; v.score += w; v.types[r.type]++; v.last_at = Math.max(v.last_at, r.created_at);
+        for (const bk of [byMonth[month - 1], byHour[hr]]) { bk.count++; bk.types[r.type]++; }
+        if (isNight(hr)) { night++; v.night++; }
+        const [e, n] = utm(r.lat, r.lng), key = [floorDiv(e, cell * 1000) * cell, floorDiv(n, cell * 1000) * cell];
+        if (!cells.has(key.join())) cells.set(key.join(), { e: key[0], n: key[1], count: 0, score: 0 });
+        const c = cells.get(key.join());
+        c.count++; c.score += w;
+      }
+      const sum = (xs) => xs.reduce((s2, r) => s2 + WEIGHT[r.severity], 0);
+      return {
+        months, since, until: now, include_sample: includeSample, sample_reports: sampleN, false_reports: falseN,
+        total: rows.length, score: sum(rows), first_at: rows.length ? rows[0].created_at : null, weights: WEIGHT,
+        night: { from_hour: NIGHT_FROM, to_hour: NIGHT_TO, count: night, day_count: rows.length - night },
+        types: M.types.map((t) => ({ key: t.key, label: t.label, count: rows.filter((r) => r.type === t.key).length, score: sum(rows.filter((r) => r.type === t.key)) })),
+        villages: [...villages.values()].sort((a, c) => c.score - a.score || c.count - a.count || (a.name < c.name ? -1 : a.name > c.name ? 1 : 0)),
+        months_of_year: byMonth, hours: byHour, cell_km: cell,
+        cells: [...cells.values()].sort((a, c) => c.score - a.score || c.count - a.count || a.e - c.e || a.n - c.n),
       };
     }],
     ["GET", /^\/api\/export\.csv$/, "officer", (u, b, q) => {

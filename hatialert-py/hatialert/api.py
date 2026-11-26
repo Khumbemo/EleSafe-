@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import secrets
 
-from . import domain
+from . import domain, geo
 from .security import new_token, verify_pin
 from .store import DEMO_ACCOUNTS, Store, now_ms
 
@@ -726,6 +726,78 @@ class App:
             "crop_acres": round(sum(r["crop_acres"] for r in rows), 2),
             "property_inr": sum(r["property_inr"] for r in rows),
             "casualties": sum(r["casualties"] for r in rows),
+        }
+
+    @route("GET", "/api/stats/patterns", auth="officer")
+    def get_patterns(self, user, data, q):
+        """Hotspots, seasons and time of day. `months` = calendar months back
+        including this one (0 = all time); sample rows only with `sample=1`;
+        false reports are always left out."""
+        months = int(_num(q, "months", int, 0, 120, default=12))
+        cell = int(_num(q, "cell_km", int, 1, 5, default=2))
+        if cell not in domain.GRID_CELL_KM:
+            raise ApiError(400, "Choose a square size of 1, 2 or 5 km.", "cell_km")
+        include_sample = q.get("sample") == "1"
+        now = self.clock()
+        since = domain.ist_month_start(now, months - 1) if months else None
+        rows, sample_n, false_n = [], 0, 0
+        for r in self.store.pattern_incidents(since):
+            if r["status"] == "false_report":
+                false_n += r["sample"] == 0 or include_sample
+                continue
+            if r["sample"]:
+                sample_n += 1
+                if not include_sample:
+                    continue
+            rows.append(r)
+        types = list(domain.INCIDENT_TYPES)
+        zero = lambda: dict.fromkeys(types, 0)  # noqa: E731
+        weight = domain.SEVERITY_WEIGHT
+        villages, cells = {}, {}
+        by_month = [{"month": m, "count": 0, "types": zero()} for m in range(1, 13)]
+        by_hour = [{"hour": h, "count": 0, "types": zero()} for h in range(24)]
+        night = 0
+        for r in rows:
+            _, month, hour = domain.ist_month_hour(r["created_at"])
+            w = weight[r["severity"]]
+            v = villages.setdefault(r["village"], {"name": r["village"], "count": 0, "score": 0, "night": 0, "types": zero(), "last_at": 0})
+            v["count"] += 1
+            v["score"] += w
+            v["types"][r["type"]] += 1
+            v["last_at"] = max(v["last_at"], r["created_at"])
+            for b in (by_month[month - 1], by_hour[hour]):
+                b["count"] += 1
+                b["types"][r["type"]] += 1
+            if domain.is_night(hour):
+                night += 1
+                v["night"] += 1
+            e, n = geo.utm(r["lat"], r["lng"])
+            key = (int(e // (cell * 1000)) * cell, int(n // (cell * 1000)) * cell)
+            c = cells.setdefault(key, {"e": key[0], "n": key[1], "count": 0, "score": 0})
+            c["count"] += 1
+            c["score"] += w
+        return {
+            "months": months,
+            "since": since,
+            "until": now,
+            "include_sample": include_sample,
+            "sample_reports": sample_n,
+            "false_reports": false_n,
+            "total": len(rows),
+            "score": sum(weight[r["severity"]] for r in rows),
+            "first_at": rows[0]["created_at"] if rows else None,
+            "weights": weight,
+            "night": {"from_hour": domain.NIGHT_FROM_HOUR, "to_hour": domain.NIGHT_TO_HOUR, "count": night, "day_count": len(rows) - night},
+            "types": [
+                {"key": k, "label": domain.INCIDENT_TYPES[k]["label"], "count": sum(r["type"] == k for r in rows),
+                 "score": sum(weight[r["severity"]] for r in rows if r["type"] == k)}
+                for k in types
+            ],
+            "villages": sorted(villages.values(), key=lambda v: (-v["score"], -v["count"], v["name"])),
+            "months_of_year": by_month,
+            "hours": by_hour,
+            "cell_km": cell,
+            "cells": sorted(cells.values(), key=lambda c: (-c["score"], -c["count"], c["e"], c["n"])),
         }
 
     @route("GET", "/api/export.csv", auth="officer")

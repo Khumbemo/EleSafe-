@@ -7,6 +7,7 @@ import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,9 @@ import kotlinx.coroutines.runBlocking
 import org.hatialert.client.app.AdminData
 import org.hatialert.client.app.AdminSection
 import org.hatialert.client.app.AlertDraft
+import org.hatialert.client.app.AlertWatch
+import org.hatialert.client.app.MemorySeenAlertStore
+import org.hatialert.client.app.PollOutcome
 import org.hatialert.client.app.AppController
 import org.hatialert.client.app.VillageForm
 import org.hatialert.client.app.plural
@@ -646,7 +650,7 @@ class PythonServerIntegrationTest {
             guard.composeAlert(AlertDraft(message = "Herd near Wozhuro", villages = setOf("Wozhuro")))
             val sent = assertNotNull(guard.sendAlert())
             assertEquals("manual", sent.sms?.mode)
-            assertEquals("Alert sent. ${plural(sent.sms!!.recipients, "person", "people")} to text by hand (Admin > Messages)", guard.state.value.message?.text)
+            assertEquals("Alert sent. ${plural(sent.sms!!.recipients, "person", "people")} to text by hand (Admin › Messages)", guard.state.value.message?.text)
             guard.signOut()
 
             val officer = AppController(MemorySettingsStore(Settings(serverUrl = url)), Dispatchers.IO)
@@ -663,6 +667,53 @@ class PythonServerIntegrationTest {
         } finally {
             kill(proc)
         }
+    }
+
+    /**
+     * The background warning check (Android's WorkManager job) against the real server: a
+     * guard's warning to the villager's village gives exactly one notification, the next check
+     * none; a warning for another village, an information message and an all-clear give none.
+     */
+    @Test
+    @Order(15)
+    fun warningNotificationsAreShownOnce() {
+        val vil = client()
+        vil.login("9000000001", "1111")
+        val watch = AlertWatch(MemorySeenAlertStore())
+        // whatever is active from earlier tests is shown (or not) now, so the steps below start clean
+        assertIs<PollOutcome.Notices>(watch.poll(vil))
+        assertEquals(emptyList(), assertIs<PollOutcome.Notices>(watch.poll(vil)).notices)
+
+        val guard = client()
+        guard.login("9000000002", "2222")
+        val sent = guard.sendAlert(NewAlert("warning", "Herd of 4 at the river crossing. Stay indoors after dark.", listOf("Wozhuro", "Sanis")))
+        val notices = assertIs<PollOutcome.Notices>(watch.poll(vil)).notices
+        assertEquals(1, notices.size, "exactly one new notification")
+        val n = notices.single()
+        assertEquals(sent.id, n.alertId)
+        assertEquals("Elephant warning · Wozhuro", n.title)
+        assertEquals("Hati sabdhan · Wozhuro", org.hatialert.client.app.Translator.nagamese.tr(n.title))
+        assertEquals("Herd of 4 at the river crossing. Stay indoors after dark.", n.message)
+        assertEquals(listOf("Wozhuro", "Sanis"), n.villages)
+        assertEquals(emptyList(), assertIs<PollOutcome.Notices>(watch.poll(vil)).notices, "the second check shows nothing")
+
+        // not for the villager's village, or not a warning: nothing
+        guard.sendAlert(NewAlert("warning", "Herd near Sanis.", listOf("Sanis")))
+        guard.sendAlert(NewAlert("info", "Patrol in Wozhuro tonight.", listOf("Wozhuro")))
+        assertEquals(emptyList(), assertIs<PollOutcome.Notices>(watch.poll(vil)).notices)
+        // an all-clear ends the warning; the next warning is new again
+        guard.sendAlert(NewAlert("all_clear", "The herd has gone back to the forest.", listOf("Wozhuro")))
+        assertEquals(emptyList(), assertIs<PollOutcome.Notices>(watch.poll(vil)).notices)
+        assertEquals(null, vil.overview().warning)
+        val again = guard.sendAlert(NewAlert("warning", "The herd is back near the school.", listOf("Wozhuro")))
+        assertEquals(listOf(again.id), assertIs<PollOutcome.Notices>(watch.poll(vil)).notices.map { it.alertId })
+
+        // signed out: the check stops
+        vil.logout()
+        assertEquals(PollOutcome.SignedOut, watch.poll(vil))
+        val stale = HatiClient(base, token = "not-a-session")
+        assertEquals(PollOutcome.SignedOut, watch.poll(stale))
+        guard.logout()
     }
 
     companion object {

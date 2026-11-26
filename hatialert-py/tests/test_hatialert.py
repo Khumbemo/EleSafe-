@@ -12,6 +12,7 @@ from hatialert.api import App
 from hatialert.store import Store
 
 T0 = 1_790_000_000_000  # fixed clock for repeatable tests
+SEED_INCIDENTS = 83  # 13 in the last 45 days + 70 older closed ones for the pattern charts
 
 
 class Clock:
@@ -316,7 +317,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(self.report([{"kind": "photo", "data": b64(big)}])[0], 413)
         s, d = self.report([{"kind": "voice", "data": b64(WEBM)}] * 3)
         self.assertEqual((s, d["error"]), (400, "A report can have up to 2 voice notes."))
-        self.assertEqual(self.app.store.one("SELECT COUNT(*) AS n FROM incidents")["n"], 13)  # nothing saved
+        self.assertEqual(self.app.store.one("SELECT COUNT(*) AS n FROM incidents")["n"], SEED_INCIDENTS)  # nothing saved
 
     def test_add_later_and_permissions(self):
         iid = self.report([])[1]["id"]
@@ -389,13 +390,154 @@ class StatsTests(unittest.TestCase):
         s, text = self.off.call("GET", "/api/export.csv?days=90")
         rows = list(csv.reader(io.StringIO(text)))
         self.assertEqual(rows[0][0], "report_no")
-        self.assertEqual(len(rows), 15)
+        in_window = self.app.store.one("SELECT COUNT(*) AS n FROM incidents WHERE created_at >= ?", (T0 - 90 * domain.DAY_MS,))["n"]
+        self.assertEqual(len(rows), 1 + in_window)  # header + the 90-day rows, the new one included
         self.assertEqual(rows[-1][13], "'=cmd()")
 
     def test_clear_sample(self):
         self.assertEqual(self.off.call("DELETE", "/api/sample")[0], 200)
         self.assertEqual(self.off.call("GET", "/api/stats")[1]["total"], 0)
         self.assertFalse(self.off.call("GET", "/api/overview")[1]["has_sample"])
+
+
+def ist_ms(y, mo, d, hh=0, mm=0, ss=0):
+    """A time given in IST, as epoch milliseconds."""
+    from datetime import datetime
+    return int(datetime(y, mo, d, hh, mm, ss, tzinfo=domain.IST).timestamp()) * 1000
+
+
+class PatternTests(unittest.TestCase):
+    """GET /api/stats/patterns: hotspots, seasons, time of day, grid squares."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.clock.t = ist_ms(2026, 1, 15, 12)
+        self.store = Store(pin_iterations=1000)
+        self.app = App(self.store, clock=self.clock)
+        for name, phone, role in (("V", "9100000001", "villager"), ("G", "9100000002", "guard"), ("O", "9100000003", "officer")):
+            self.store.create_user(name, phone, "Sanis", "4826", role)
+        self.off = Client(self.app)
+        self.off.login("9100000003", "4826")
+
+    def add(self, at, kind="sighting", village="Sanis", herd=1, cas=0, lat=None, lng=None, sample=0):
+        v = domain.VILLAGE_BY_NAME[village]
+        return self.store.add_incident({
+            "type": kind, "severity": domain.classify_severity(kind, herd, cas), "herd_size": herd, "casualties": cas,
+            "crop_acres": 0, "property_inr": 0, "heading": "", "village": village,
+            "lat": v["lat"] if lat is None else lat, "lng": v["lng"] if lng is None else lng, "place": "", "description": "",
+        }, None, at, sample=sample)
+
+    def get(self, query=""):
+        s, p = self.off.call("GET", "/api/stats/patterns" + query)
+        self.assertEqual(s, 200, p)
+        return p
+
+    def test_officers_only(self):
+        for phone in ("9100000001", "9100000002"):
+            c = Client(self.app)
+            c.login(phone, "4826")
+            self.assertEqual(c.call("GET", "/api/stats/patterns")[0], 403)
+        self.assertEqual(Client(self.app).call("GET", "/api/stats/patterns")[0], 401)
+
+    def test_ist_hour_boundaries_and_night(self):
+        for hh, mm, ss in ((17, 59, 59), (18, 0, 0), (5, 59, 59), (6, 0, 0), (23, 59, 59), (0, 0, 0)):
+            self.add(ist_ms(2026, 1, 10, hh, mm, ss))
+        p = self.get()
+        counts = {b["hour"]: b["count"] for b in p["hours"] if b["count"]}
+        self.assertEqual(counts, {17: 1, 18: 1, 5: 1, 6: 1, 23: 1, 0: 1})
+        self.assertEqual(len(p["hours"]), 24)
+        # 18:00, 05:59, 23:59 and 00:00 are night; 17:59 and 06:00 are day
+        self.assertEqual(p["night"], {"from_hour": 18, "to_hour": 6, "count": 4, "day_count": 2})
+        # midnight IST is 18:30 UTC the day before: still hour 0 in IST
+        self.assertEqual(ist_ms(2026, 1, 10) % domain.DAY_MS, 66_600_000)
+
+    def test_months_across_the_year_boundary(self):
+        self.add(ist_ms(2025, 12, 31, 23, 59, 59), kind="crop_raid", herd=6)
+        self.add(ist_ms(2026, 1, 1, 0, 0, 0), kind="crop_raid")  # 2025-12-31 18:30 UTC
+        self.add(ist_ms(2025, 1, 20, 21), kind="crop_raid")      # last January
+        p = self.get("?months=0")
+        by = {b["month"]: b for b in p["months_of_year"]}
+        self.assertEqual(len(p["months_of_year"]), 12)
+        self.assertEqual((by[12]["count"], by[1]["count"]), (1, 2))  # January adds up across years
+        self.assertEqual(by[1]["types"]["crop_raid"], 2)
+        self.assertEqual(by[12]["types"], {**dict.fromkeys(domain.INCIDENT_TYPES, 0), "crop_raid": 1})
+        # the window is whole IST calendar months, this one included
+        one = self.get("?months=1")
+        self.assertEqual((one["since"], one["total"]), (ist_ms(2026, 1, 1), 1))
+        two = self.get("?months=2")
+        self.assertEqual((two["since"], two["total"]), (ist_ms(2025, 12, 1), 2))
+        self.assertEqual(self.get("?months=13")["since"], ist_ms(2025, 1, 1))
+        self.assertEqual(self.get("?months=13")["total"], 3)
+        self.assertEqual(self.get()["total"], 2)  # default: 12 months, Feb 2025 onwards
+
+    def test_sample_and_false_reports_left_out(self):
+        self.add(ist_ms(2026, 1, 5, 20), sample=1)
+        self.add(ist_ms(2026, 1, 6, 20), sample=1)
+        real = self.add(ist_ms(2026, 1, 7, 20))
+        p = self.get()
+        self.assertEqual((p["total"], p["sample_reports"], p["include_sample"]), (1, 2, False))
+        p = self.get("?sample=1")
+        self.assertEqual((p["total"], p["sample_reports"], p["include_sample"]), (3, 2, True))
+        self.store.add_event(real, "false_report", "", None, ist_ms(2026, 1, 7, 22), new_status="false_report")
+        p = self.get()
+        self.assertEqual((p["total"], p["false_reports"], p["villages"], p["cells"]), (0, 1, [], []))
+        self.assertIsNone(p["first_at"])
+        # the demo seed is all sample: nothing counts until asked for
+        app, _ = make_app()
+        seeded = as_role(app, "officer").call("GET", "/api/stats/patterns")[1]
+        self.assertEqual(seeded["total"], 0)
+        self.assertGreater(seeded["sample_reports"], 60)
+        self.assertGreater(as_role(app, "officer").call("GET", "/api/stats/patterns?sample=1")[1]["total"], 60)
+
+    def test_hotspots_ranked_by_severity_weight(self):
+        for d in (2, 3, 4):
+            self.add(ist_ms(2026, 1, d, 10), village="Englan")            # three low sightings: score 3
+        self.add(ist_ms(2026, 1, 8, 21), kind="injury", village="Ralan", cas=1)  # one critical: score 4
+        self.add(ist_ms(2026, 1, 9, 2), kind="crop_raid", village="Ralan", herd=2)  # medium: 2
+        p = self.get()
+        self.assertEqual([(v["name"], v["count"], v["score"], v["night"]) for v in p["villages"]],
+                         [("Ralan", 2, 6, 2), ("Englan", 3, 3, 0)])
+        self.assertEqual(p["villages"][0]["types"]["injury"], 1)
+        self.assertEqual(p["villages"][0]["last_at"], ist_ms(2026, 1, 9, 2))
+        self.assertEqual((p["total"], p["score"], p["weights"]["critical"]), (5, 9, 4))
+        t = {x["key"]: (x["count"], x["score"]) for x in p["types"]}
+        self.assertEqual((t["sighting"], t["injury"], t["death"]), ((3, 3), (1, 4), (0, 0)))
+
+    def test_grid_squares_use_utm_46n(self):
+        # Wokha Town is at 625817 E, 2887053 N
+        self.add(ist_ms(2026, 1, 2), village="Wokha Town")
+        lat, lng = geo.utm_inverse(625999.5, 2887000.5)  # same 1 km square
+        self.add(ist_ms(2026, 1, 3), village="Wokha Town", lat=lat, lng=lng, kind="property_damage")
+        lat, lng = geo.utm_inverse(626000.5, 2886999.5)  # one east, one south
+        self.add(ist_ms(2026, 1, 4), village="Wokha Town", lat=lat, lng=lng)
+        one = self.get("?cell_km=1")
+        self.assertEqual([(c["e"], c["n"], c["count"], c["score"]) for c in one["cells"]], [(625, 2887, 2, 4), (626, 2886, 1, 1)])
+        self.assertEqual(one["cell_km"], 1)
+        self.assertEqual([(c["e"], c["n"], c["count"]) for c in self.get()["cells"]], [(624, 2886, 2), (626, 2886, 1)])
+        self.assertEqual([(c["e"], c["n"], c["count"]) for c in self.get("?cell_km=5")["cells"]], [(625, 2885, 3)])
+
+    def test_demo_seed_has_a_year_of_patterns(self):
+        store = Store(pin_iterations=1000)
+        store.seed(at=T0)
+        rows = store.all("SELECT * FROM incidents")
+        self.assertEqual(len(rows), SEED_INCIDENTS)
+        self.assertTrue(all(r["sample"] for r in rows))
+        old = [r for r in rows if r["created_at"] < T0 - 45 * domain.DAY_MS - domain.DAY_MS]
+        self.assertEqual(len(old), 70)
+        self.assertTrue(all(r["status"] in ("resolved", "false_report") and r["reporter_id"] is None for r in old))
+        self.assertTrue(all(r["created_at"] > T0 - 365 * domain.DAY_MS for r in rows))
+        parts = [domain.ist_month_hour(r["created_at"]) for r in rows]
+        self.assertGreaterEqual(len({m for _, m, _ in parts}), 11)          # most months of the year
+        self.assertGreater(sum(domain.is_night(h) for _, _, h in parts), len(rows) / 2)  # mostly after dark
+        self.assertGreaterEqual(len({r["village"] for r in rows}), 8)
+        store2 = Store(pin_iterations=1000)
+        store2.seed(at=T0)
+        self.assertEqual(rows, store2.all("SELECT * FROM incidents"))  # repeatable
+
+    def test_bad_parameters(self):
+        for q, field in (("?cell_km=3", "cell_km"), ("?cell_km=0", "cell_km"), ("?months=-1", "months"), ("?months=121", "months"), ("?months=all", "months")):
+            s, err = self.off.call("GET", "/api/stats/patterns" + q)
+            self.assertEqual((s, err["field"]), (400, field), q)
 
 
 class FakeSms:
@@ -552,7 +694,7 @@ class AdminTests(unittest.TestCase):
         s, st = self.off.call("GET", "/api/admin/status")
         self.assertEqual(s, 200)
         self.assertFalse(st["sms"]["enabled"])
-        self.assertEqual(st["storage"]["incidents"], 13)
+        self.assertEqual(st["storage"]["incidents"], SEED_INCIDENTS)
 
 
 class VillageAdminTests(unittest.TestCase):
@@ -616,7 +758,7 @@ class PrivacyLimitTests(unittest.TestCase):
         a = self.vil.call("POST", "/api/incidents", body)[1]
         b = self.vil.call("POST", "/api/incidents", body)[1]
         self.assertEqual(a["id"], b["id"])
-        self.assertEqual(self.app.store.one("SELECT COUNT(*) AS n FROM incidents")["n"], 14)
+        self.assertEqual(self.app.store.one("SELECT COUNT(*) AS n FROM incidents")["n"], SEED_INCIDENTS + 1)
         self.assertEqual(self.vil.call("POST", "/api/incidents", {**body, "client_id": "x"})[1]["field"], "client_id")
 
 
@@ -725,7 +867,7 @@ class OpsTests(unittest.TestCase):
             path = f"{d}/b.db"
             app.store.backup(path)
             n = sqlite3.connect(path).execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
-        self.assertEqual(n, 13)
+        self.assertEqual(n, SEED_INCIDENTS)
 
     def test_backup_rotation(self):
         import tempfile

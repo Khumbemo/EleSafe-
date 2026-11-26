@@ -75,6 +75,11 @@
     casesFilter: "open",
     casesVillage: "",
     days: 30,
+    /** District overview patterns: months back (0 = all time), type filter
+        ("" = all), and sample data (null = only when there is nothing else). */
+    patternMonths: 12,
+    patternType: "",
+    patternSample: null,
     /** When the network went away, or null when online. */
     offlineSince: null
   };
@@ -528,6 +533,577 @@
     }
   }
 
+  // src/geo.ts
+  var utmKm = (() => {
+    const f = 1 / 298.257223563, n = f / (2 - f), A = 6378137 / (1 + n) * (1 + n * n / 4 + n ** 4 / 64);
+    const al = [n / 2 - 2 * n * n / 3 + 5 * n ** 3 / 16, 13 * n * n / 48 - 3 * n ** 3 / 5, 61 * n ** 3 / 240];
+    const c2 = 2 * Math.sqrt(n) / (1 + n), rad = Math.PI / 180;
+    return (lat, lon) => {
+      const phi = lat * rad, dl = (lon - 93) * rad;
+      const t = Math.sinh(Math.atanh(Math.sin(phi)) - c2 * Math.atanh(c2 * Math.sin(phi)));
+      const xi = Math.atan2(t, Math.cos(dl)), eta = Math.atanh(Math.sin(dl) / Math.sqrt(1 + t * t));
+      let e = eta, nn = xi;
+      al.forEach((a, j) => {
+        const k = 2 * (j + 1);
+        e += a * Math.cos(k * xi) * Math.sinh(k * eta);
+        nn += a * Math.sin(k * xi) * Math.cosh(k * eta);
+      });
+      return [(5e5 + 0.9996 * A * e) / 1e3, 0.9996 * A * nn / 1e3];
+    };
+  })();
+  function destination(lat, lng, km, deg) {
+    const R = 6371.0088, d = km / R, th = deg * Math.PI / 180, p1 = lat * Math.PI / 180, l1 = lng * Math.PI / 180;
+    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(th));
+    const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+    return [p2 * 180 / Math.PI, l2 * 180 / Math.PI];
+  }
+
+  // src/map.ts
+  var heatLevel = (score, max) => score > 0 && max > 0 ? Math.min(5, Math.max(1, Math.ceil(5 * score / max))) : 0;
+  var layersP = null;
+  function loadLayers() {
+    if (!layersP) layersP = fetch("map/layers.json").then((r2) => r2.ok ? r2.json() : null).then((d) => d ? prepareLayers(d) : null).catch(() => null);
+    return layersP;
+  }
+  function prepareLayers(d) {
+    const [e0, n0, e1, n1] = d.extent;
+    const unpack = (p2) => {
+      const out = [];
+      let x = 0, y = 0;
+      for (let i = 0; i < p2.length; i += 2) {
+        x += p2[i];
+        y += p2[i + 1];
+        out.push([x / 100, y / 100]);
+      }
+      return out;
+    };
+    const toD = (pts, close) => "M" + pts.map(([e, n]) => `${(e - e0).toFixed(2)},${(n1 - n).toFixed(2)}`).join("L") + (close ? "Z" : "");
+    const contourLabels = [];
+    const contours = { minor: "", index: "" };
+    for (const c2 of d.contours) {
+      for (const p2 of c2.paths) {
+        const pts = unpack(p2);
+        contours[c2.index ? "index" : "minor"] += toD(pts);
+        if (c2.index && pts.length > 20) {
+          const [e, n] = pts[pts.length >> 1];
+          if (!contourLabels.some((l) => l.elev === c2.elev && Math.hypot(l.e - e, l.n - n) < 6)) contourLabels.push({ e, n, elev: c2.elev, text: c2.elev.toLocaleString("en-IN") + " m" });
+        }
+      }
+    }
+    const streams = {};
+    for (const st of d.streams) streams[st.order] = (streams[st.order] || "") + toD(unpack(st.path));
+    const districts = d.districts.map((x) => {
+      const rings = x.rings.map(unpack);
+      const all = rings.flat();
+      return { name: x.name, state: x.state, d: rings.map((r2) => toD(r2, true)).join(""), ce: all.reduce((s2, p2) => s2 + p2[0], 0) / all.length, cn: all.reduce((s2, p2) => s2 + p2[1], 0) / all.length };
+    });
+    return { e0, n0, e1, n1, W: e1 - e0, H: n1 - n0, terrain: d.terrain.href, contours, contourLabels, streams, districts, peaks: d.peaks, attribution: d.attribution, step: d.contour_step };
+  }
+  var mapSeq = 0;
+  function mapBlock(opts) {
+    const id = "m" + ++mapSeq;
+    const box = h(
+      "div",
+      { class: "mapbox", "data-map": id },
+      h(
+        "div",
+        { class: "mapframe", tabindex: 0, "aria-label": "Map of Wokha district. Use plus and minus keys to zoom, arrow keys to move." },
+        s("svg", { class: "map", role: "img", "aria-label": opts.label || "Map of villages and open incidents" }),
+        h(
+          "div",
+          { class: "mapctl" },
+          h("button", { type: "button", "data-z": "in", "aria-label": "Zoom in" }, "+"),
+          h("button", { type: "button", "data-z": "out", "aria-label": "Zoom out" }, "−"),
+          h("button", { type: "button", "data-z": "fit", "aria-label": "Fit to area" }, "⤢")
+        ),
+        h("div", { class: "scalebar", "aria-hidden": "true" }, h("i"), h("span"))
+      ),
+      mapLegend(opts)
+    );
+    loadLayers().then((L) => {
+      if (box.isConnected) drawMap(box, opts, L);
+    });
+    return box;
+  }
+  function mapLegend({ radius, cells, cellKm = 1, incidents }) {
+    const key = (cls, label) => h("span", null, h("i", { class: cls }), label);
+    const heat = !!cells && cells.length > 0;
+    return [
+      h(
+        "div",
+        { class: "legend" },
+        heat && h("span", { class: "heatkey" }, `${cellKm} km squares: fewer`, [1, 2, 3, 4, 5].map((k) => h("i", { class: `hk heat${k}` })), "more"),
+        (!heat || incidents && incidents.length > 0) && [key("dotk critical", "Critical"), key("dotk high", "High"), key("dotk medium", "Medium"), key("dotk low", "Low")],
+        key("vk", "Village"),
+        key("vk unv", "Village, position not verified"),
+        radius ? key("lk ring", `Your ${radius} km alert area`) : null,
+        key("lk water", "Stream"),
+        key("lk ct", "Contour, 100 m"),
+        key("lk dist", "District boundary")
+      ),
+      h("details", { class: "attrib" }, h("summary", null, "Map sources"), h("p", { "data-attrib": true }))
+    ];
+  }
+  function drawMap(box, { incidents = [], home, radius = 0, focus = null, cells = [], cellKm = 1 }, L) {
+    const svg = $("svg", box), frame = $(".mapframe", box);
+    const V = state.meta.villages;
+    const vp = V.map((v) => utmKm(v.lat, v.lng));
+    const ip = incidents.map((i) => utmKm(i.lat, i.lng));
+    const all = [...vp, ...ip];
+    const e0 = L ? L.e0 : Math.min(...all.map((p2) => p2[0])) - 15, n1 = L ? L.n1 : Math.max(...all.map((p2) => p2[1])) + 15;
+    const W = L ? L.W : 30 + Math.max(...all.map((p2) => p2[0])) - Math.min(...all.map((p2) => p2[0])), H = L ? L.H : 30 + Math.max(...all.map((p2) => p2[1])) - Math.min(...all.map((p2) => p2[1]));
+    const X = ([e]) => e - e0, Y = ([, n]) => n1 - n;
+    const hv = V.find((v) => v.name === home);
+    const f2 = (v) => v.toFixed(3);
+    const mapId = box.dataset.map;
+    const base = [
+      s("defs", null, s("marker", { id: `arrow-${mapId}`, viewBox: "0 0 10 10", refX: 5, refY: 5, markerWidth: 4, markerHeight: 4, orient: "auto-start-reverse" }, s("path", { class: "arrowhead", d: "M0 0 10 5 0 10z" }))),
+      s("rect", { class: "land", x: -W, y: -H, width: 3 * W, height: 3 * H })
+    ];
+    if (L) {
+      const wokha = L.districts.find((d) => d.name === "Wokha");
+      base.push(s("image", { class: "relief", href: L.terrain, x: 0, y: 0, width: W, height: H, preserveAspectRatio: "none" }));
+      if (wokha) base.push(s("path", { class: "outside", "fill-rule": "evenodd", d: `M${-W},${-H}H${2 * W}V${2 * H}H${-W}Z${wokha.d}` }));
+      base.push(s("path", { class: "ct", d: L.contours.minor }), s("path", { class: "ct idx", d: L.contours.index }));
+      for (const [o, d] of Object.entries(L.streams)) base.push(s("path", { class: `water o${o}`, d }));
+      for (const d of L.districts) if (d.name !== "Wokha") base.push(s("path", { class: `dist ${d.state === "Assam" ? "assam" : ""}`, d: d.d }));
+      if (wokha) base.push(s("path", { class: "dist wokha", d: wokha.d }));
+    }
+    if (cells.length) {
+      const max = Math.max(...cells.map((c2) => c2.score));
+      base.push(s("g", { class: "cells", "aria-hidden": "true" }, cells.map((c2) => s("rect", {
+        class: `cell heat${heatLevel(c2.score, max)}`,
+        x: f2(c2.e - e0),
+        y: f2(n1 - c2.n - cellKm),
+        width: cellKm,
+        height: cellKm
+      }))));
+    }
+    const gridG = s("g", { class: "grid" });
+    base.push(gridG);
+    if (hv && radius) {
+      const ring = Array.from({ length: 73 }, (_, k) => utmKm(...destination(hv.lat, hv.lng, radius, k * 5)));
+      base.push(s("path", { class: "ring", d: `M${ring.map((p2) => `${f2(X(p2))},${f2(Y(p2))}`).join("L")}Z` }));
+    }
+    const pins = [];
+    const pin = (p2, inner, cls = "") => pins.push(s("g", { class: `pin ${cls}`, "data-x": f2(X(p2)), "data-y": f2(Y(p2)) }, inner));
+    if (L) {
+      for (const d of L.districts) if (d.name !== "Wokha") pin([d.ce, d.cn], [s("text", { class: "dname", "data-pri": 7, "text-anchor": "middle" }, d.name.toUpperCase())], "dlabel");
+      for (const c2 of L.contourLabels) pin([c2.e, c2.n], [s("text", { class: "clabel", "data-pri": 8, "text-anchor": "middle", y: 3 }, c2.text)], "clab");
+      for (const pk of L.peaks) pin([pk.e, pk.n], [
+        s("path", { class: "peak", d: "M0,-7 L6,4 L-6,4Z" }),
+        s("text", { class: "plabel", "data-pri": 5, "text-anchor": "middle", y: 17 }, pk.name || ""),
+        s("text", { class: "plabel elev", "data-pri": 6, "data-with-prev": 1, "text-anchor": "middle", y: 29 }, `${pk.elev.toLocaleString("en-IN")} m`)
+      ]);
+    }
+    V.forEach((v, k) => {
+      const isHome = v.name === home;
+      pin(vp[k], [
+        s("circle", { class: `vdot${isHome ? " home" : ""}${v.verified ? "" : " unv"}`, r: isHome ? 6 : 4.5 }),
+        s("text", { class: `vlabel${isHome ? " home" : ""}`, "data-pri": isHome ? 0 : v.verified ? 3 : 4, x: 9, y: 4 }, v.name),
+        s("title", null, `${v.name}: ${v.verified ? v.source : "position not verified"}`)
+      ], "vpin");
+    });
+    const dirs = state.meta.directions;
+    incidents.forEach((i, k) => {
+      const r2 = 7 + Math.min(i.herd_size || 0, 20) * 0.35;
+      let arrow = null;
+      if (i.heading) {
+        const a = dirs.indexOf(i.heading) * 45 * Math.PI / 180, s0 = r2 + 2, s1 = r2 + 24;
+        arrow = s("line", { class: "heading", "marker-end": `url(#arrow-${mapId})`, x1: (Math.sin(a) * s0).toFixed(1), y1: (-Math.cos(a) * s0).toFixed(1), x2: (Math.sin(a) * s1).toFixed(1), y2: (-Math.cos(a) * s1).toFixed(1) });
+      }
+      const label = `${i.type_label}, ${i.severity_label} severity, near ${i.village}, ${ago(i.created_at)}`;
+      pin(ip[k], [arrow, s("a", { href: `#/case/${i.id}`, "aria-label": label }, s("title", null, label), s("circle", { class: `inc ${i.severity}${i.id === focus ? " focus" : ""}`, r: r2.toFixed(1) }))], "ipin");
+    });
+    base.push(s("g", { class: "pins" }, pins));
+    svg.replaceChildren(...base);
+    const attrib = $maybe("[data-attrib]", box);
+    if (attrib) attrib.textContent = L ? "UTM zone 46N grid, km. " + L.attribution.join(". ") + ". Mount Tiyi height from SRTM." : "Base map unavailable; showing villages and incidents only.";
+    const pinEls = $$(".pin", svg).map((g) => ({ g, x: +g.dataset.x, y: +g.dataset.y }));
+    const labels = $$("text[data-pri]", svg).sort((a, b) => +a.dataset.pri - +b.dataset.pri);
+    const marks = $$(".inc, .vdot, .peak", svg);
+    function declutter() {
+      labels.forEach((t) => t.classList.remove("hidden-label"));
+      const taken = marks.map((m) => m.getBoundingClientRect()).filter((r2) => r2.width);
+      const hit = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+      for (const t of labels) {
+        const r2 = t.getBoundingClientRect();
+        if (!r2.width) continue;
+        const prev = t.previousElementSibling;
+        const orphan = t.dataset.withPrev && prev && prev.classList.contains("hidden-label");
+        if (orphan || t.dataset.pri !== "0" && taken.some((x) => hit(r2, x))) t.classList.add("hidden-label");
+        else taken.push(r2);
+      }
+    }
+    let view = { x: 0, y: 0, w: 0 };
+    let raf = 0;
+    const aspect = () => (frame.clientHeight || 300) / (frame.clientWidth || 400);
+    function fit() {
+      const pts2 = [...incidents.length ? ip : [], ...cells.flatMap((c2) => [[c2.e, c2.n], [c2.e + cellKm, c2.n + cellKm]]), ...hv ? [utmKm(hv.lat, hv.lng)] : []];
+      if (hv && radius) {
+        const c2 = utmKm(hv.lat, hv.lng);
+        pts2.push([c2[0] - radius, c2[1] - radius], [c2[0] + radius, c2[1] + radius]);
+      }
+      if (!pts2.length || focus && ip.length === 1 && !radius) pts2.push(...focus ? [[ip[0][0] - 4, ip[0][1] - 4], [ip[0][0] + 4, ip[0][1] + 4]] : vp);
+      const xs = pts2.map(X), ys = pts2.map(Y);
+      let w = Math.max(8, Math.max(...xs) - Math.min(...xs) + 3);
+      const h2 = Math.max(...ys) - Math.min(...ys) + 3;
+      w = Math.max(w, h2 / aspect());
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      set({ x: cx - w / 2, y: cy - w * aspect() / 2, w });
+    }
+    function set(v) {
+      const maxW = Math.max(W, H / aspect()) * 1.02;
+      const w = Math.min(maxW, Math.max(1.5, v.w)), h2 = w * aspect();
+      const x = w >= W ? (W - w) / 2 : Math.min(Math.max(v.x, -w * 0.1), W - w * 0.9);
+      const y = h2 >= H ? (H - h2) / 2 : Math.min(Math.max(v.y, -h2 * 0.1), H - h2 * 0.9);
+      view = { x, y, w };
+      svg.setAttribute("viewBox", `${x.toFixed(3)} ${y.toFixed(3)} ${w.toFixed(3)} ${h2.toFixed(3)}`);
+      const k = w / (frame.clientWidth || 400);
+      for (const p2 of pinEls) p2.g.setAttribute("transform", `translate(${p2.x} ${p2.y}) scale(${k.toFixed(5)})`);
+      svg.classList.toggle("far", w > 30);
+      svg.classList.toggle("mid", w > 9 && w <= 30);
+      const step = [1, 2, 5, 10, 20].find((st) => w / st <= 8) || 20;
+      const g = [];
+      for (let gx = Math.ceil((e0 + x) / step) * step; gx <= e0 + x + w; gx += step) {
+        const sx = gx - e0;
+        g.push(s("line", { x1: sx, y1: y, x2: sx, y2: y + h2 }), s("text", { x: sx + 3 * k, y: y + 12 * k, "font-size": (10 * k).toFixed(4) }, `${gx}E`));
+      }
+      for (let gy = Math.ceil((n1 - y - h2) / step) * step; gy <= n1 - y; gy += step) {
+        const sy = n1 - gy;
+        g.push(s("line", { x1: x, y1: sy, x2: x + w, y2: sy }), s("text", { x: x + 3 * k, y: sy - 3 * k, "font-size": (10 * k).toFixed(4) }, `${gy}N`));
+      }
+      gridG.replaceChildren(...g);
+      svg.style.setProperty("--gs", `${(3 * k).toFixed(4)}px`);
+      const target = 90 * k, nice = [0.25, 0.5, 1, 2, 5, 10, 20, 50].find((st) => st >= target * 0.6) || 50;
+      const sb = $(".scalebar", box);
+      $("i", sb).style.width = `${(nice / k).toFixed(0)}px`;
+      $("span", sb).textContent = nice < 1 ? `${nice * 1e3} m` : `${nice} km`;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(declutter);
+    }
+    const zoomAt = (factor, px, py) => {
+      const r2 = frame.getBoundingClientRect();
+      const fx = px === void 0 ? 0.5 : (px - r2.left) / r2.width, fy = py === void 0 ? 0.5 : (py - r2.top) / r2.height;
+      const w = view.w * factor, h0 = view.w * aspect();
+      set({ x: view.x + fx * (view.w - w), y: view.y + fy * (h0 - w * aspect()), w });
+    };
+    $(".mapctl", box).onclick = (e) => {
+      const b = e.target.closest("[data-z]");
+      if (!b) return;
+      if (b.dataset.z === "fit") fit();
+      else zoomAt(b.dataset.z === "in" ? 0.6 : 1 / 0.6);
+    };
+    frame.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey && document.activeElement !== frame) return;
+      e.preventDefault();
+      zoomAt(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 15e-4)), e.clientX, e.clientY);
+    }, { passive: false });
+    frame.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      zoomAt(0.5, e.clientX, e.clientY);
+    });
+    frame.addEventListener("keydown", (e) => {
+      const k = view.w / 6;
+      const keys = {
+        "+": () => zoomAt(0.7),
+        "=": () => zoomAt(0.7),
+        "-": () => zoomAt(1 / 0.7),
+        "0": fit,
+        ArrowLeft: () => set({ ...view, x: view.x - k }),
+        ArrowRight: () => set({ ...view, x: view.x + k }),
+        ArrowUp: () => set({ ...view, y: view.y - k }),
+        ArrowDown: () => set({ ...view, y: view.y + k })
+      };
+      if (keys[e.key]) {
+        e.preventDefault();
+        keys[e.key]();
+      }
+    });
+    const pts = /* @__PURE__ */ new Map();
+    let last = null, moved = 0;
+    svg.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) for (const id of pts.keys()) svg.setPointerCapture(id);
+      last = null;
+      moved = 0;
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType !== "mouse" && pts.size < 2) return;
+      const ps = [...pts.values()];
+      const cx = ps.reduce((sum, p2) => sum + p2.x, 0) / ps.length, cy = ps.reduce((sum, p2) => sum + p2.y, 0) / ps.length;
+      const span = ps.length > 1 ? Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) : 0;
+      if (last) {
+        const k = view.w / frame.clientWidth;
+        moved += Math.abs(cx - last.cx) + Math.abs(cy - last.cy);
+        if (moved > 6 && e.pointerType === "mouse" && !svg.hasPointerCapture(e.pointerId)) svg.setPointerCapture(e.pointerId);
+        set({ ...view, x: view.x - (cx - last.cx) * k, y: view.y - (cy - last.cy) * k });
+        if (span && last.span) zoomAt(last.span / span, cx, cy);
+      }
+      last = { cx, cy, span };
+    });
+    const up = (e) => {
+      pts.delete(e.pointerId);
+      last = null;
+    };
+    svg.addEventListener("pointerup", up);
+    svg.addEventListener("pointercancel", up);
+    svg.addEventListener("click", (e) => {
+      if (moved > 6) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
+    new ResizeObserver(() => {
+      if (view.w) set(view);
+    }).observe(frame);
+    fit();
+  }
+
+  // src/views/patterns.ts
+  var MIN_FOR_SHARE = 20;
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  var hh = (k) => String(k).padStart(2, "0") + ":00";
+  var share = (n, total) => total >= MIN_FOR_SHARE && total > 0 ? `${n} (${Math.round(100 * n / total)}%)` : String(n);
+  var monthYear = (ms) => new Date(ms).toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
+  function table(caption, head, rows) {
+    return h(
+      "details",
+      { class: "tbl-fold" },
+      h("summary", null, "Show as a table"),
+      h(
+        "div",
+        { class: "tblwrap" },
+        h(
+          "table",
+          { class: "tbl" },
+          h("caption", null, caption),
+          h("thead", null, h("tr", null, head.map((x, k) => h("th", { scope: "col", class: k ? "num" : "" }, x)))),
+          h("tbody", null, rows.map((r2) => h("tr", null, r2.map((c2, k) => k ? h("td", { class: "num" }, c2) : h("th", { scope: "row" }, c2)))))
+        )
+      )
+    );
+  }
+  function columns(vals, labels, o) {
+    const W = 420, H = 160, top = 18, bottom = 22, left = 24, n = vals.length;
+    const max = Math.max(1, ...vals), bw = (W - left) / n, base = H - bottom;
+    const y = (v) => top + (base - top) * (1 - v / max);
+    const x = (k) => left + k * bw;
+    const bands = [];
+    if (o.shade) {
+      for (let k = 0; k < n; ) {
+        if (!o.shade(k)) {
+          k++;
+          continue;
+        }
+        let e = k;
+        while (e < n && o.shade(e)) e++;
+        bands.push(
+          s("rect", { class: "band", x: x(k).toFixed(1), y: 2, width: ((e - k) * bw).toFixed(1), height: base - 2 }),
+          s("text", { class: "bandlabel", x: (x(k) + 4).toFixed(1), y: 13 }, o.shadeLabel || "")
+        );
+        k = e;
+      }
+    }
+    const peak = vals.indexOf(Math.max(...vals));
+    return s(
+      "svg",
+      { class: "chart cols", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": o.label },
+      bands,
+      s("line", { class: "axis", x1: left, y1: base, x2: W, y2: base }),
+      s("line", { class: "axis", x1: left, y1: y(max), x2: W, y2: y(max), "stroke-dasharray": "3 4" }),
+      s("text", { x: left - 6, y: y(max) + 4, "text-anchor": "end" }, max),
+      s("text", { x: left - 6, y: base + 4, "text-anchor": "end" }, "0"),
+      vals.map((v, k) => s("rect", {
+        class: `bar${v ? "" : " zero"}`,
+        x: (x(k) + bw * 0.14).toFixed(1),
+        y: (v ? y(v) : base - 2).toFixed(1),
+        width: Math.max(1, bw * 0.72).toFixed(1),
+        height: (v ? base - y(v) : 2).toFixed(1)
+      }, s("title", null, o.tip(k)))),
+      vals[peak] > 0 && s("text", { class: "peak", x: (x(peak) + bw / 2).toFixed(1), y: (y(vals[peak]) - 4).toFixed(1), "text-anchor": "middle" }, vals[peak]),
+      o.ticks.map((k) => s("text", { x: (x(k) + bw / 2).toFixed(1), y: H - 6, "text-anchor": "middle" }, labels[k]))
+    );
+  }
+  function nearestVillage(e, n) {
+    let best = "", d = Infinity;
+    for (const v of state.meta.villages) {
+      const [ve, vn] = utmKm(v.lat, v.lng), dd = Math.hypot(ve - e, vn - n);
+      if (dd < d) {
+        d = dd;
+        best = v.name;
+      }
+    }
+    return `${best}, ${d.toFixed(1)} km`;
+  }
+  var url = (sample) => `/api/stats/patterns?months=${state.patternMonths}&sample=${sample ? 1 : 0}`;
+  async function loadPatterns(box) {
+    fill(box, h("div", { class: "skeleton", "aria-busy": "true", "aria-label": "Loading…" }, h("span", { class: "skel line title" }), h("span", { class: "skel block tall" })));
+    let p2;
+    try {
+      p2 = await api("GET", url(state.patternSample === true));
+      if (state.patternSample === null && p2.total === 0 && p2.sample_reports > 0) p2 = await api("GET", url(true));
+    } catch (err) {
+      fill(box, h("section", { class: "card" }, h("h2", null, "Patterns"), h("p", { class: "muted" }, asErr(err).message)));
+      return;
+    }
+    if (box.isConnected) renderPatterns(box, p2);
+  }
+  function renderPatterns(box, p2) {
+    var _a2;
+    const typeKey = state.patternType && p2.types.some((t) => t.key === state.patternType && t.count) ? state.patternType : "";
+    const typeLabel = typeKey ? p2.types.find((t) => t.key === typeKey).label : "";
+    const pick = (b) => typeKey ? b.types[typeKey] : b.count;
+    const period = p2.months ? `since ${monthYear(p2.since)}` : "from all time";
+    const sampleBox = h("input", { type: "checkbox", id: "pat-sample", checked: p2.include_sample });
+    const head = [
+      h(
+        "div",
+        { class: "pagehead" },
+        h("h2", { class: "section-title" }, "Patterns: where and when"),
+        h("p", { class: "muted", id: "pat-basis" }, `Based on ${plural(p2.total, "report")} ${period}. False reports are left out.`)
+      ),
+      h(
+        "div",
+        { class: "row between" },
+        h("div", { class: "seg", role: "group", "aria-label": "Patterns period" }, [[12, "12 months"], [0, "All time"]].map(([m, label]) => h("button", {
+          type: "button",
+          "data-pmonths": m,
+          "aria-pressed": String(state.patternMonths === m)
+        }, label))),
+        p2.sample_reports > 0 && h("label", { class: "switch" }, sampleBox, h("span", null, `Include ${plural(p2.sample_reports, "sample report")}`))
+      ),
+      p2.include_sample && p2.sample_reports > 0 && h(
+        "p",
+        { class: "notice", id: "pat-sample-note" },
+        h("span", null, "Showing sample reports. They are made-up demo data, not real incidents.")
+      )
+    ];
+    const wire = () => {
+      $$("[data-pmonths]", box).forEach((b) => b.onclick = () => {
+        state.patternMonths = +b.dataset.pmonths;
+        loadPatterns(box);
+      });
+      sampleBox.onchange = () => {
+        state.patternSample = sampleBox.checked;
+        loadPatterns(box);
+      };
+      $$("[data-ptype]", box).forEach((b) => b.onclick = () => {
+        state.patternType = b.dataset.ptype || "";
+        renderPatterns(box, p2);
+      });
+    };
+    if (!p2.total) {
+      fill(box, head, h("section", { class: "card" }, h("p", { class: "muted" }, "No reports to show for this period.")));
+      wire();
+      return;
+    }
+    const few = p2.total < MIN_FOR_SHARE && h(
+      "p",
+      { class: "notice", id: "pat-few" },
+      h("span", null, `Only ${plural(p2.total, "report")} so far: read these as counts, not as trends.`)
+    );
+    const vmax = Math.max(...p2.villages.map((v) => v.score));
+    const breakdown = (t) => p2.types.filter((x) => t[x.key]).map((x) => [" · ", h("span", null, x.label), ` ${t[x.key]}`]);
+    const w = p2.weights;
+    const villages = h(
+      "section",
+      { class: "card", id: "pat-villages" },
+      h("h2", null, "Hotspot villages"),
+      h("p", { class: "small muted" }, `Ranked by severity score: each report counts critical ${w.critical}, high ${w.high}, medium ${w.medium}, low ${w.low}.`),
+      h("ol", { class: "hot" }, p2.villages.slice(0, 10).map((v) => h(
+        "li",
+        null,
+        h(
+          "div",
+          { class: "hot-head" },
+          h("b", null, v.name),
+          h("span", { class: "hot-score" }, h("i", { class: `hk heat${heatLevel(v.score, vmax)}`, "aria-hidden": "true" }), `score ${v.score}`)
+        ),
+        s(
+          "svg",
+          { class: "hot-bar", viewBox: "0 0 100 8", preserveAspectRatio: "none", "aria-hidden": "true" },
+          s("rect", { class: "track", width: 100, height: 8, rx: 3 }),
+          s("rect", { class: `fill heat${heatLevel(v.score, vmax)}`, width: (v.score / vmax * 100).toFixed(1), height: 8, rx: 3 })
+        ),
+        h("small", null, h("span", null, `${plural(v.count, "report")}, ${v.night} at night`), breakdown(v.types))
+      ))),
+      p2.villages.length > 10 && h("p", { class: "small muted" }, `${p2.villages.length - 10} more villages with fewer reports.`),
+      table(
+        "Reports by village",
+        ["Village", "Score", "Reports", "At night", ...p2.types.filter((t) => t.count).map((t) => t.label)],
+        p2.villages.map((v) => [v.name, v.score, v.count, v.night, ...p2.types.filter((t) => t.count).map((t) => v.types[t.key])])
+      )
+    );
+    const top = p2.cells.slice(0, 10);
+    const squares = h(
+      "section",
+      { class: "card", id: "pat-map" },
+      h("h2", null, "Hotspot map"),
+      h("p", { class: "small muted" }, `Reports grouped into ${p2.cell_km} × ${p2.cell_km} km squares of the UTM zone 46N grid, shaded by severity score. ${plural(p2.cells.length, "square")} had reports.`),
+      mapBlock({ cells: p2.cells, cellKm: p2.cell_km, label: `Map of ${plural(p2.cells.length, "grid square")} with reports, shaded by severity score` }),
+      table(
+        `Busiest ${p2.cell_km} km squares`,
+        ["Square (south-west corner, km)", "Nearest village", "Reports", "Score"],
+        top.map((c2) => [`${c2.e} E, ${c2.n} N`, nearestVillage(c2.e + p2.cell_km / 2, c2.n + p2.cell_km / 2), c2.count, c2.score])
+      )
+    );
+    const filter = h(
+      "div",
+      { class: "seg", role: "group", "aria-label": "Type of incident in the charts", id: "pat-types" },
+      h("button", { type: "button", "data-ptype": "", "aria-pressed": String(!typeKey) }, "All types"),
+      p2.types.filter((t) => t.count).map((t) => h("button", { type: "button", "data-ptype": t.key, "aria-pressed": String(typeKey === t.key) }, t.label))
+    );
+    const what = typeKey ? typeLabel : "All reports";
+    const shown = typeKey ? ((_a2 = p2.types.find((t) => t.key === typeKey)) == null ? void 0 : _a2.count) || 0 : p2.total;
+    const mv = p2.months_of_year.map(pick);
+    const busiest = Math.max(...mv);
+    const peakMonths = mv.map((v, k) => v === busiest && v ? MONTH_NAMES[k] : "").filter(Boolean).join(", ");
+    const seasons = h(
+      "section",
+      { class: "card", id: "pat-months" },
+      h("h2", null, "Time of year"),
+      h("p", { class: "small muted" }, `${what} by month, ${p2.months ? "over the last 12 months" : "added up across all years"}.`),
+      columns(mv, MONTHS, {
+        label: `${what} by month of the year. Busiest: ${peakMonths || "none"}.`,
+        ticks: MONTHS.map((_, k) => k),
+        tip: (k) => `${MONTH_NAMES[k]}: ${plural(mv[k], "report")}`
+      }),
+      h("p", { class: "small" }, busiest ? `Busiest: ${peakMonths} (${plural(busiest, "report")}).` : "No reports of this type."),
+      table(`${what} by month`, ["Month", "Reports"], MONTH_NAMES.map((m, k) => [m, share(mv[k], shown)]))
+    );
+    const hv = p2.hours.map(pick);
+    const nf = p2.night.from_hour, nt = p2.night.to_hour, isNight = (k) => k >= nf || k < nt;
+    const nightN = hv.reduce((a, v, k) => a + (isNight(k) ? v : 0), 0);
+    const nightText = `Night is ${hh(nf)} to ${hh(nt)} IST`;
+    const clock = h(
+      "section",
+      { class: "card", id: "pat-hours" },
+      h("h2", null, "Time of day"),
+      h("p", { class: "small muted" }, `${what} by hour of the day, Indian Standard Time. ${nightText} (shaded).`),
+      columns(hv, hv.map((_, k) => hh(k)), {
+        label: `${what} by hour of the day. ${nightN} of ${shown} at night.`,
+        ticks: [0, 6, 12, 18],
+        tip: (k) => `${hh(k)} to ${hh((k + 1) % 24)}: ${plural(hv[k], "report")}`,
+        shade: isNight,
+        shadeLabel: "Night"
+      }),
+      h(
+        "div",
+        { class: "kpis" },
+        h("div", { class: "kpi" }, h("small", null, "At night"), h("b", { id: "pat-night" }, share(nightN, shown)), h("small", null, `${hh(nf)} to ${hh(nt)}`)),
+        h("div", { class: "kpi" }, h("small", null, "By day"), h("b", null, share(shown - nightN, shown)), h("small", null, `${hh(nt)} to ${hh(nf)}`))
+      ),
+      table(`${what} by hour (IST)`, ["Hour", "Reports"], hv.map((v, k) => [`${hh(k)}–${hh((k + 1) % 24)}${isNight(k) ? " (night)" : ""}`, share(v, shown)]))
+    );
+    fill(box, head, few, villages, squares, h("div", { class: "pat-filter" }, h("span", { class: "label" }, "Show"), filter), seasons, clock);
+    wire();
+  }
+
   // src/views/dashboard.ts
   async function copy(text, fallbackEl) {
     var _a2;
@@ -600,6 +1176,7 @@
     }
     const out = h("section", { class: "card", id: "csv-out", hidden: true });
     const csvButton = h("button", { class: "btn small", id: "csv" }, "Export CSV");
+    const patterns = h("div", { class: "patterns", id: "patterns" });
     const kpi = (label, value, note) => h("div", { class: "kpi" }, h("small", null, label), h("b", null, value), h("small", null, note));
     const none = () => h("p", { class: "muted" }, "No incidents in this period.");
     fill(
@@ -627,12 +1204,14 @@
       h(
         "div",
         { class: "grid2 wide" },
-        h("section", { class: "card" }, h("h2", null, "Hotspot villages"), st.by_village.length ? hbars(st.by_village.slice(0, 8)) : none()),
+        h("section", { class: "card" }, h("h2", null, "Villages"), st.by_village.length ? hbars(st.by_village.slice(0, 8)) : none()),
         h("section", { class: "card" }, h("h2", null, "What happened"), hbars(st.by_type.filter((t) => t.count)), st.total ? null : none())
       ),
       h("section", { class: "card" }, h("h2", null, "Severity"), hbars(st.by_severity)),
-      out
+      out,
+      patterns
     );
+    loadPatterns(patterns);
     $$("[data-days]", main).forEach((b) => b.onclick = () => {
       state.days = +b.dataset.days;
       viewDashboard();
@@ -1342,326 +1921,6 @@
         } }
       }, "Sign out"))
     );
-  }
-
-  // src/geo.ts
-  var utmKm = (() => {
-    const f = 1 / 298.257223563, n = f / (2 - f), A = 6378137 / (1 + n) * (1 + n * n / 4 + n ** 4 / 64);
-    const al = [n / 2 - 2 * n * n / 3 + 5 * n ** 3 / 16, 13 * n * n / 48 - 3 * n ** 3 / 5, 61 * n ** 3 / 240];
-    const c2 = 2 * Math.sqrt(n) / (1 + n), rad = Math.PI / 180;
-    return (lat, lon) => {
-      const phi = lat * rad, dl = (lon - 93) * rad;
-      const t = Math.sinh(Math.atanh(Math.sin(phi)) - c2 * Math.atanh(c2 * Math.sin(phi)));
-      const xi = Math.atan2(t, Math.cos(dl)), eta = Math.atanh(Math.sin(dl) / Math.sqrt(1 + t * t));
-      let e = eta, nn = xi;
-      al.forEach((a, j) => {
-        const k = 2 * (j + 1);
-        e += a * Math.cos(k * xi) * Math.sinh(k * eta);
-        nn += a * Math.sin(k * xi) * Math.cosh(k * eta);
-      });
-      return [(5e5 + 0.9996 * A * e) / 1e3, 0.9996 * A * nn / 1e3];
-    };
-  })();
-  function destination(lat, lng, km, deg) {
-    const R = 6371.0088, d = km / R, th = deg * Math.PI / 180, p1 = lat * Math.PI / 180, l1 = lng * Math.PI / 180;
-    const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(th));
-    const l2 = l1 + Math.atan2(Math.sin(th) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
-    return [p2 * 180 / Math.PI, l2 * 180 / Math.PI];
-  }
-
-  // src/map.ts
-  var layersP = null;
-  function loadLayers() {
-    if (!layersP) layersP = fetch("map/layers.json").then((r2) => r2.ok ? r2.json() : null).then((d) => d ? prepareLayers(d) : null).catch(() => null);
-    return layersP;
-  }
-  function prepareLayers(d) {
-    const [e0, n0, e1, n1] = d.extent;
-    const unpack = (p2) => {
-      const out = [];
-      let x = 0, y = 0;
-      for (let i = 0; i < p2.length; i += 2) {
-        x += p2[i];
-        y += p2[i + 1];
-        out.push([x / 100, y / 100]);
-      }
-      return out;
-    };
-    const toD = (pts, close) => "M" + pts.map(([e, n]) => `${(e - e0).toFixed(2)},${(n1 - n).toFixed(2)}`).join("L") + (close ? "Z" : "");
-    const contourLabels = [];
-    const contours = { minor: "", index: "" };
-    for (const c2 of d.contours) {
-      for (const p2 of c2.paths) {
-        const pts = unpack(p2);
-        contours[c2.index ? "index" : "minor"] += toD(pts);
-        if (c2.index && pts.length > 20) {
-          const [e, n] = pts[pts.length >> 1];
-          if (!contourLabels.some((l) => l.elev === c2.elev && Math.hypot(l.e - e, l.n - n) < 6)) contourLabels.push({ e, n, elev: c2.elev, text: c2.elev.toLocaleString("en-IN") + " m" });
-        }
-      }
-    }
-    const streams = {};
-    for (const st of d.streams) streams[st.order] = (streams[st.order] || "") + toD(unpack(st.path));
-    const districts = d.districts.map((x) => {
-      const rings = x.rings.map(unpack);
-      const all = rings.flat();
-      return { name: x.name, state: x.state, d: rings.map((r2) => toD(r2, true)).join(""), ce: all.reduce((s2, p2) => s2 + p2[0], 0) / all.length, cn: all.reduce((s2, p2) => s2 + p2[1], 0) / all.length };
-    });
-    return { e0, n0, e1, n1, W: e1 - e0, H: n1 - n0, terrain: d.terrain.href, contours, contourLabels, streams, districts, peaks: d.peaks, attribution: d.attribution, step: d.contour_step };
-  }
-  var mapSeq = 0;
-  function mapBlock(opts) {
-    const id = "m" + ++mapSeq;
-    const box = h(
-      "div",
-      { class: "mapbox", "data-map": id },
-      h(
-        "div",
-        { class: "mapframe", tabindex: 0, "aria-label": "Map of Wokha district. Use plus and minus keys to zoom, arrow keys to move." },
-        s("svg", { class: "map", role: "img", "aria-label": "Map of villages and open incidents" }),
-        h(
-          "div",
-          { class: "mapctl" },
-          h("button", { type: "button", "data-z": "in", "aria-label": "Zoom in" }, "+"),
-          h("button", { type: "button", "data-z": "out", "aria-label": "Zoom out" }, "−"),
-          h("button", { type: "button", "data-z": "fit", "aria-label": "Fit to area" }, "⤢")
-        ),
-        h("div", { class: "scalebar", "aria-hidden": "true" }, h("i"), h("span"))
-      ),
-      mapLegend(opts.radius)
-    );
-    loadLayers().then((L) => {
-      if (box.isConnected) drawMap(box, opts, L);
-    });
-    return box;
-  }
-  function mapLegend(radius) {
-    const key = (cls, label) => h("span", null, h("i", { class: cls }), label);
-    return [
-      h(
-        "div",
-        { class: "legend" },
-        key("dotk critical", "Critical"),
-        key("dotk high", "High"),
-        key("dotk medium", "Medium"),
-        key("dotk low", "Low"),
-        key("vk", "Village"),
-        key("vk unv", "Village, position not verified"),
-        radius ? key("lk ring", `Your ${radius} km alert area`) : null,
-        key("lk water", "Stream"),
-        key("lk ct", "Contour, 100 m"),
-        key("lk dist", "District boundary")
-      ),
-      h("details", { class: "attrib" }, h("summary", null, "Map sources"), h("p", { "data-attrib": true }))
-    ];
-  }
-  function drawMap(box, { incidents = [], home, radius = 0, focus = null }, L) {
-    const svg = $("svg", box), frame = $(".mapframe", box);
-    const V = state.meta.villages;
-    const vp = V.map((v) => utmKm(v.lat, v.lng));
-    const ip = incidents.map((i) => utmKm(i.lat, i.lng));
-    const all = [...vp, ...ip];
-    const e0 = L ? L.e0 : Math.min(...all.map((p2) => p2[0])) - 15, n1 = L ? L.n1 : Math.max(...all.map((p2) => p2[1])) + 15;
-    const W = L ? L.W : 30 + Math.max(...all.map((p2) => p2[0])) - Math.min(...all.map((p2) => p2[0])), H = L ? L.H : 30 + Math.max(...all.map((p2) => p2[1])) - Math.min(...all.map((p2) => p2[1]));
-    const X = ([e]) => e - e0, Y = ([, n]) => n1 - n;
-    const hv = V.find((v) => v.name === home);
-    const f2 = (v) => v.toFixed(3);
-    const mapId = box.dataset.map;
-    const base = [
-      s("defs", null, s("marker", { id: `arrow-${mapId}`, viewBox: "0 0 10 10", refX: 5, refY: 5, markerWidth: 4, markerHeight: 4, orient: "auto-start-reverse" }, s("path", { class: "arrowhead", d: "M0 0 10 5 0 10z" }))),
-      s("rect", { class: "land", x: -W, y: -H, width: 3 * W, height: 3 * H })
-    ];
-    if (L) {
-      const wokha = L.districts.find((d) => d.name === "Wokha");
-      base.push(s("image", { class: "relief", href: L.terrain, x: 0, y: 0, width: W, height: H, preserveAspectRatio: "none" }));
-      if (wokha) base.push(s("path", { class: "outside", "fill-rule": "evenodd", d: `M${-W},${-H}H${2 * W}V${2 * H}H${-W}Z${wokha.d}` }));
-      base.push(s("path", { class: "ct", d: L.contours.minor }), s("path", { class: "ct idx", d: L.contours.index }));
-      for (const [o, d] of Object.entries(L.streams)) base.push(s("path", { class: `water o${o}`, d }));
-      for (const d of L.districts) if (d.name !== "Wokha") base.push(s("path", { class: `dist ${d.state === "Assam" ? "assam" : ""}`, d: d.d }));
-      if (wokha) base.push(s("path", { class: "dist wokha", d: wokha.d }));
-    }
-    const gridG = s("g", { class: "grid" });
-    base.push(gridG);
-    if (hv && radius) {
-      const ring = Array.from({ length: 73 }, (_, k) => utmKm(...destination(hv.lat, hv.lng, radius, k * 5)));
-      base.push(s("path", { class: "ring", d: `M${ring.map((p2) => `${f2(X(p2))},${f2(Y(p2))}`).join("L")}Z` }));
-    }
-    const pins = [];
-    const pin = (p2, inner, cls = "") => pins.push(s("g", { class: `pin ${cls}`, "data-x": f2(X(p2)), "data-y": f2(Y(p2)) }, inner));
-    if (L) {
-      for (const d of L.districts) if (d.name !== "Wokha") pin([d.ce, d.cn], [s("text", { class: "dname", "data-pri": 7, "text-anchor": "middle" }, d.name.toUpperCase())], "dlabel");
-      for (const c2 of L.contourLabels) pin([c2.e, c2.n], [s("text", { class: "clabel", "data-pri": 8, "text-anchor": "middle", y: 3 }, c2.text)], "clab");
-      for (const pk of L.peaks) pin([pk.e, pk.n], [
-        s("path", { class: "peak", d: "M0,-7 L6,4 L-6,4Z" }),
-        s("text", { class: "plabel", "data-pri": 5, "text-anchor": "middle", y: 17 }, pk.name || ""),
-        s("text", { class: "plabel elev", "data-pri": 6, "data-with-prev": 1, "text-anchor": "middle", y: 29 }, `${pk.elev.toLocaleString("en-IN")} m`)
-      ]);
-    }
-    V.forEach((v, k) => {
-      const isHome = v.name === home;
-      pin(vp[k], [
-        s("circle", { class: `vdot${isHome ? " home" : ""}${v.verified ? "" : " unv"}`, r: isHome ? 6 : 4.5 }),
-        s("text", { class: `vlabel${isHome ? " home" : ""}`, "data-pri": isHome ? 0 : v.verified ? 3 : 4, x: 9, y: 4 }, v.name),
-        s("title", null, `${v.name}: ${v.verified ? v.source : "position not verified"}`)
-      ], "vpin");
-    });
-    const dirs = state.meta.directions;
-    incidents.forEach((i, k) => {
-      const r2 = 7 + Math.min(i.herd_size || 0, 20) * 0.35;
-      let arrow = null;
-      if (i.heading) {
-        const a = dirs.indexOf(i.heading) * 45 * Math.PI / 180, s0 = r2 + 2, s1 = r2 + 24;
-        arrow = s("line", { class: "heading", "marker-end": `url(#arrow-${mapId})`, x1: (Math.sin(a) * s0).toFixed(1), y1: (-Math.cos(a) * s0).toFixed(1), x2: (Math.sin(a) * s1).toFixed(1), y2: (-Math.cos(a) * s1).toFixed(1) });
-      }
-      const label = `${i.type_label}, ${i.severity_label} severity, near ${i.village}, ${ago(i.created_at)}`;
-      pin(ip[k], [arrow, s("a", { href: `#/case/${i.id}`, "aria-label": label }, s("title", null, label), s("circle", { class: `inc ${i.severity}${i.id === focus ? " focus" : ""}`, r: r2.toFixed(1) }))], "ipin");
-    });
-    base.push(s("g", { class: "pins" }, pins));
-    svg.replaceChildren(...base);
-    const attrib = $maybe("[data-attrib]", box);
-    if (attrib) attrib.textContent = L ? "UTM zone 46N grid, km. " + L.attribution.join(". ") + ". Mount Tiyi height from SRTM." : "Base map unavailable; showing villages and incidents only.";
-    const pinEls = $$(".pin", svg).map((g) => ({ g, x: +g.dataset.x, y: +g.dataset.y }));
-    const labels = $$("text[data-pri]", svg).sort((a, b) => +a.dataset.pri - +b.dataset.pri);
-    const marks = $$(".inc, .vdot, .peak", svg);
-    function declutter() {
-      labels.forEach((t) => t.classList.remove("hidden-label"));
-      const taken = marks.map((m) => m.getBoundingClientRect()).filter((r2) => r2.width);
-      const hit = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
-      for (const t of labels) {
-        const r2 = t.getBoundingClientRect();
-        if (!r2.width) continue;
-        const prev = t.previousElementSibling;
-        const orphan = t.dataset.withPrev && prev && prev.classList.contains("hidden-label");
-        if (orphan || t.dataset.pri !== "0" && taken.some((x) => hit(r2, x))) t.classList.add("hidden-label");
-        else taken.push(r2);
-      }
-    }
-    let view = { x: 0, y: 0, w: 0 };
-    let raf = 0;
-    const aspect = () => (frame.clientHeight || 300) / (frame.clientWidth || 400);
-    function fit() {
-      const pts2 = [...incidents.length ? ip : [], ...hv ? [utmKm(hv.lat, hv.lng)] : []];
-      if (hv && radius) {
-        const c2 = utmKm(hv.lat, hv.lng);
-        pts2.push([c2[0] - radius, c2[1] - radius], [c2[0] + radius, c2[1] + radius]);
-      }
-      if (!pts2.length || focus && ip.length === 1 && !radius) pts2.push(...focus ? [[ip[0][0] - 4, ip[0][1] - 4], [ip[0][0] + 4, ip[0][1] + 4]] : vp);
-      const xs = pts2.map(X), ys = pts2.map(Y);
-      let w = Math.max(8, Math.max(...xs) - Math.min(...xs) + 3);
-      const h2 = Math.max(...ys) - Math.min(...ys) + 3;
-      w = Math.max(w, h2 / aspect());
-      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-      set({ x: cx - w / 2, y: cy - w * aspect() / 2, w });
-    }
-    function set(v) {
-      const maxW = Math.max(W, H / aspect()) * 1.02;
-      const w = Math.min(maxW, Math.max(1.5, v.w)), h2 = w * aspect();
-      const x = w >= W ? (W - w) / 2 : Math.min(Math.max(v.x, -w * 0.1), W - w * 0.9);
-      const y = h2 >= H ? (H - h2) / 2 : Math.min(Math.max(v.y, -h2 * 0.1), H - h2 * 0.9);
-      view = { x, y, w };
-      svg.setAttribute("viewBox", `${x.toFixed(3)} ${y.toFixed(3)} ${w.toFixed(3)} ${h2.toFixed(3)}`);
-      const k = w / (frame.clientWidth || 400);
-      for (const p2 of pinEls) p2.g.setAttribute("transform", `translate(${p2.x} ${p2.y}) scale(${k.toFixed(5)})`);
-      svg.classList.toggle("far", w > 30);
-      svg.classList.toggle("mid", w > 9 && w <= 30);
-      const step = [1, 2, 5, 10, 20].find((st) => w / st <= 8) || 20;
-      const g = [];
-      for (let gx = Math.ceil((e0 + x) / step) * step; gx <= e0 + x + w; gx += step) {
-        const sx = gx - e0;
-        g.push(s("line", { x1: sx, y1: y, x2: sx, y2: y + h2 }), s("text", { x: sx + 3 * k, y: y + 12 * k, "font-size": (10 * k).toFixed(4) }, `${gx}E`));
-      }
-      for (let gy = Math.ceil((n1 - y - h2) / step) * step; gy <= n1 - y; gy += step) {
-        const sy = n1 - gy;
-        g.push(s("line", { x1: x, y1: sy, x2: x + w, y2: sy }), s("text", { x: x + 3 * k, y: sy - 3 * k, "font-size": (10 * k).toFixed(4) }, `${gy}N`));
-      }
-      gridG.replaceChildren(...g);
-      svg.style.setProperty("--gs", `${(3 * k).toFixed(4)}px`);
-      const target = 90 * k, nice = [0.25, 0.5, 1, 2, 5, 10, 20, 50].find((st) => st >= target * 0.6) || 50;
-      const sb = $(".scalebar", box);
-      $("i", sb).style.width = `${(nice / k).toFixed(0)}px`;
-      $("span", sb).textContent = nice < 1 ? `${nice * 1e3} m` : `${nice} km`;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(declutter);
-    }
-    const zoomAt = (factor, px, py) => {
-      const r2 = frame.getBoundingClientRect();
-      const fx = px === void 0 ? 0.5 : (px - r2.left) / r2.width, fy = py === void 0 ? 0.5 : (py - r2.top) / r2.height;
-      const w = view.w * factor, h0 = view.w * aspect();
-      set({ x: view.x + fx * (view.w - w), y: view.y + fy * (h0 - w * aspect()), w });
-    };
-    $(".mapctl", box).onclick = (e) => {
-      const b = e.target.closest("[data-z]");
-      if (!b) return;
-      if (b.dataset.z === "fit") fit();
-      else zoomAt(b.dataset.z === "in" ? 0.6 : 1 / 0.6);
-    };
-    frame.addEventListener("wheel", (e) => {
-      if (!e.ctrlKey && document.activeElement !== frame) return;
-      e.preventDefault();
-      zoomAt(Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 15e-4)), e.clientX, e.clientY);
-    }, { passive: false });
-    frame.addEventListener("dblclick", (e) => {
-      e.preventDefault();
-      zoomAt(0.5, e.clientX, e.clientY);
-    });
-    frame.addEventListener("keydown", (e) => {
-      const k = view.w / 6;
-      const keys = {
-        "+": () => zoomAt(0.7),
-        "=": () => zoomAt(0.7),
-        "-": () => zoomAt(1 / 0.7),
-        "0": fit,
-        ArrowLeft: () => set({ ...view, x: view.x - k }),
-        ArrowRight: () => set({ ...view, x: view.x + k }),
-        ArrowUp: () => set({ ...view, y: view.y - k }),
-        ArrowDown: () => set({ ...view, y: view.y + k })
-      };
-      if (keys[e.key]) {
-        e.preventDefault();
-        keys[e.key]();
-      }
-    });
-    const pts = /* @__PURE__ */ new Map();
-    let last = null, moved = 0;
-    svg.addEventListener("pointerdown", (e) => {
-      if (e.pointerType === "mouse" && e.button !== 0) return;
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size === 2) for (const id of pts.keys()) svg.setPointerCapture(id);
-      last = null;
-      moved = 0;
-    });
-    svg.addEventListener("pointermove", (e) => {
-      if (!pts.has(e.pointerId)) return;
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (e.pointerType !== "mouse" && pts.size < 2) return;
-      const ps = [...pts.values()];
-      const cx = ps.reduce((sum, p2) => sum + p2.x, 0) / ps.length, cy = ps.reduce((sum, p2) => sum + p2.y, 0) / ps.length;
-      const span = ps.length > 1 ? Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) : 0;
-      if (last) {
-        const k = view.w / frame.clientWidth;
-        moved += Math.abs(cx - last.cx) + Math.abs(cy - last.cy);
-        if (moved > 6 && e.pointerType === "mouse" && !svg.hasPointerCapture(e.pointerId)) svg.setPointerCapture(e.pointerId);
-        set({ ...view, x: view.x - (cx - last.cx) * k, y: view.y - (cy - last.cy) * k });
-        if (span && last.span) zoomAt(last.span / span, cx, cy);
-      }
-      last = { cx, cy, span };
-    });
-    const up = (e) => {
-      pts.delete(e.pointerId);
-      last = null;
-    };
-    svg.addEventListener("pointerup", up);
-    svg.addEventListener("pointercancel", up);
-    svg.addEventListener("click", (e) => {
-      if (moved > 6) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    }, true);
-    new ResizeObserver(() => {
-      if (view.w) set(view);
-    }).observe(frame);
-    fit();
   }
 
   // src/media.ts

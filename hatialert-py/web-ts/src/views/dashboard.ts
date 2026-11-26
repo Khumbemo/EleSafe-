@@ -6,6 +6,7 @@ import { me, state } from "../state";
 import type { CountRow, Stats } from "../types";
 import { failure, loading, toast } from "../ui";
 import { asErr, inr, plural } from "../util";
+import { loadPatterns } from "./patterns";
 
 /** Copy to the clipboard, or select `fallbackEl` so the person can. */
 export async function copy(text: string, fallbackEl?: HTMLTextAreaElement): Promise<void> {
@@ -52,6 +53,7 @@ export async function viewDashboard(): Promise<void> {
   try { st = await api<Stats>("GET", `/api/stats?days=${state.days}`); } catch (err) { return failure(main, asErr(err)); }
   const out = h("section", { class: "card", id: "csv-out", hidden: true });
   const csvButton = h("button", { class: "btn small", id: "csv" }, "Export CSV");
+  const patterns = h("div", { class: "patterns", id: "patterns" });
   const kpi = (label: string, value: string | number, note: string) => h("div", { class: "kpi" }, h("small", null, label), h("b", null, value), h("small", null, note));
   const none = () => h("p", { class: "muted" }, "No incidents in this period.");
   fill(main,
@@ -68,10 +70,12 @@ export async function viewDashboard(): Promise<void> {
       kpi("Recorded losses", `${st.crop_acres} ac`, `crops · ${inr(st.property_inr)} property`)),
     h("section", { class: "card" }, h("h2", null, "Incidents per day"), seriesChart(st.series)),
     h("div", { class: "grid2 wide" },
-      h("section", { class: "card" }, h("h2", null, "Hotspot villages"), st.by_village.length ? hbars(st.by_village.slice(0, 8)) : none()),
+      h("section", { class: "card" }, h("h2", null, "Villages"), st.by_village.length ? hbars(st.by_village.slice(0, 8)) : none()),
       h("section", { class: "card" }, h("h2", null, "What happened"), hbars(st.by_type.filter((t) => t.count)), st.total ? null : none())),
     h("section", { class: "card" }, h("h2", null, "Severity"), hbars(st.by_severity)),
-    out);
+    out,
+    patterns);
+  loadPatterns(patterns);
   $$("[data-days]", main).forEach((b) => (b.onclick = () => { state.days = +(b.dataset.days as string); viewDashboard(); }));
   csvButton.onclick = async () => {
     const text = await api<string>("GET", `/api/export.csv?days=${state.days}`);

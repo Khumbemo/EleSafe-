@@ -36,6 +36,13 @@ tasks.test {
     useJUnitPlatform()
     // The integration test starts the real Python server from here (skipped without Python 3.10+).
     systemProperty("hatialert.py.dir", rootProject.file("../hatialert-py").absolutePath)
+    // The Nagamese freshness test runs tools/gen_nagamese.py; the map tests read the Android assets
+    // and the Android sources (which strings go through the translator).
+    systemProperty("hatialert.jvm.dir", rootProject.projectDir.absolutePath)
+    inputs.dir(rootProject.file("android/src/main")).withPropertyName("androidSources").optional()
+    inputs.dir(rootProject.file("tools")).withPropertyName("tools")
+    inputs.files(rootProject.file("../hatialert-py/web-ts/src/i18n/nagamese.ts"), rootProject.file("../hatialert-py/hatialert/web/map"))
+        .withPropertyName("webSources").optional()
     // The JDK's HttpURLConnection refuses PATCH; UrlConnectionTransport then sets the
     // method reflectively, which needs this on JDK 16+. Android's HttpURLConnection
     // supports PATCH natively, so the app needs nothing like it.

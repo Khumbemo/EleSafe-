@@ -75,7 +75,7 @@ private fun LazyListScope.homeItems(st: AppState, radius: Double, onOpen: (Long)
             val p = LocalPalette.current
             Card(colors = CardDefaults.cardColors(containerColor = argb(p.critSoft))) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(w.levelLabel, color = argb(p.crit), fontWeight = FontWeight.Bold)
+                    Text(tr(w.levelLabel), color = argb(p.crit), fontWeight = FontWeight.Bold)
                     Text(w.message, color = argb(p.ink))
                     Text("${w.villages.joinToString()} · ${istTime(w.sentAt)}", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
                 }
@@ -92,11 +92,11 @@ private fun LazyListScope.homeItems(st: AppState, radius: Double, onOpen: (Long)
     }
     if (map != null) item { map() }
     if (ov != null && st.nearby.isEmpty()) {
-        item { Text("No open incidents near you. Stay alert and report anything you see.", color = argb(LocalPalette.current.muted)) }
+        item { Text(tr("No open incidents near you. Stay alert and report anything you see."), color = argb(LocalPalette.current.muted)) }
     }
     items(st.nearby, key = { it.incident.id }) { n -> NearbyRow(n, onOpen) }
     if (ov?.hasSample == true) {
-        item { Text("Some incidents are sample data from the demo server.", style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted)) }
+        item { Text(tr("Some incidents are sample data from the demo server."), style = MaterialTheme.typography.bodySmall, color = argb(LocalPalette.current.muted)) }
     }
 }
 
@@ -112,7 +112,7 @@ private fun NearbyRow(n: NearbyItem, onOpen: (Long) -> Unit) {
             }
             Column(Modifier.weight(1f)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(i.typeLabel, fontWeight = FontWeight.Bold)
+                    Text(tr(i.typeLabel), fontWeight = FontWeight.Bold)
                     SeverityBadge(i.severity, i.severityLabel)
                 }
                 Text(

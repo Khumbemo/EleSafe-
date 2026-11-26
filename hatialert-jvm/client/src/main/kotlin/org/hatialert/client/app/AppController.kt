@@ -33,6 +33,10 @@ data class Settings(
     val theme: ThemeChoice = ThemeChoice.GREEN,
     val token: String? = null,
     val lastPhone: String = "",
+    /** Interface language (English or the draft Nagamese). */
+    val language: Language = Language.ENGLISH,
+    /** Warning notifications while the app is closed (checked every ~15 minutes on Android). */
+    val notifications: Boolean = false,
 ) {
     companion object {
         /** The development machine as seen from the Android emulator. */
@@ -199,6 +203,49 @@ class AppController(
 
     fun setTheme(theme: ThemeChoice) = saveSettings { it.copy(theme = theme) }
 
+    fun setLanguage(language: Language) = saveSettings { it.copy(language = language) }
+
+    /**
+     * Warning notifications on or off. The Android layer asks for the notification permission
+     * first and schedules or cancels the background check from [Settings.notifications].
+     */
+    fun setNotifications(on: Boolean) {
+        saveSettings { it.copy(notifications = on) }
+        _state.update { it.copy(message = UiMessage(if (on) NOTIFY_ON else NOTIFY_OFF, false)) }
+    }
+
+    /** A screen asked for from outside (a notification tap), opened once someone is signed in. */
+    @Volatile
+    private var wanted: Screen? = null
+
+    /**
+     * Opens [screen] now when signed in, else right after the session is resumed or a
+     * sign-in; e.g. Alerts when a warning notification is tapped.
+     */
+    suspend fun openWhenReady(screen: Screen) {
+        val user = _state.value.user
+        if (user == null || user.mustChangePin) {
+            wanted = screen
+            return
+        }
+        wanted = null
+        openNow(screen)
+    }
+
+    private suspend fun openNow(screen: Screen) {
+        navigate(screen)
+        if (_state.value.screen == Screen.Alerts) loadAlerts()
+    }
+
+    /** Opens a screen asked for before sign-in; true when there was one. */
+    private suspend fun openWanted(): Boolean {
+        val w = wanted ?: return false
+        wanted = null
+        if (!w.allowedFor(_state.value.user)) return false
+        openNow(w)
+        return true
+    }
+
     /**
      * Points the app at another server. Returns an error message for a bad
      * address. Signs out locally when the address changes (the token belongs to the old server).
@@ -240,6 +287,7 @@ class AppController(
         }
         _state.update { it.copy(user = me, screen = Screen.Home) }
         refreshHome() // also sends any saved reports
+        openWanted()
     }
 
     suspend fun signIn(phone: String, pin: String): Boolean {
@@ -265,7 +313,10 @@ class AppController(
             it.copy(user = session.user, screen = first, fieldErrors = emptyMap(), authNote = null, message = message, draft = ReportDraft(village = session.user.village))
         }
         loadMeta()
-        if (first == Screen.Home) refreshHome()
+        if (first == Screen.Home) {
+            refreshHome()
+            openWanted()
+        }
     }
 
     // --- account: sign-up, forgotten PIN, PIN change, devices, text alerts ---------
@@ -329,6 +380,7 @@ class AppController(
         if (forced) {
             loadMeta()
             refreshHome()
+            openWanted()
         }
         return true
     }
@@ -668,5 +720,9 @@ class AppController(
 
         /** The web app's message when the two PIN boxes differ. */
         const val PINS_DIFFER = "The two PINs don't match."
+
+        /** The web app's wording for its notification switch. */
+        const val NOTIFY_ON = "Alerts will show on this phone"
+        const val NOTIFY_OFF = "Phone alerts off"
     }
 }

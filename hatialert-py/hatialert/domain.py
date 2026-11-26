@@ -187,6 +187,31 @@ def ist_stamp(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, IST).strftime("%Y-%m-%d %H:%M")
 
 
+# Patterns for officers (GET /api/stats/patterns). Severity weights rank
+# hotspots: one critical report counts as much as four low ones. Night is
+# 18:00 to 05:59 IST, when crop raids mostly happen.
+SEVERITY_WEIGHT = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+NIGHT_FROM_HOUR, NIGHT_TO_HOUR = 18, 6
+GRID_CELL_KM = (1, 2, 5)
+
+
+def ist_month_hour(ms: int) -> tuple[int, int, int]:
+    """(year, month 1-12, hour 0-23) of a time in IST."""
+    d = datetime.fromtimestamp(ms // 1000, IST)
+    return d.year, d.month, d.hour
+
+
+def is_night(hour: int) -> bool:
+    return hour >= NIGHT_FROM_HOUR or hour < NIGHT_TO_HOUR
+
+
+def ist_month_start(ms: int, back: int = 0) -> int:
+    """Start (ms) of the IST calendar month `back` months before the one holding `ms`."""
+    d = datetime.fromtimestamp(ms // 1000, IST)
+    y, m = divmod(d.year * 12 + d.month - 1 - back, 12)
+    return int(datetime(y, m + 1, 1, tzinfo=IST).timestamp()) * 1000
+
+
 def reference(incident_id: int, created_ms: int) -> str:
     """Report number villagers quote on compensation claims, e.g. HA-2610-0007."""
     return "HA-" + datetime.fromtimestamp(created_ms / 1000, IST).strftime("%y%m") + f"-{incident_id:04d}"

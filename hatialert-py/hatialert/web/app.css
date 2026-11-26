@@ -572,3 +572,62 @@ main { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: m
 @media (min-width: 700px) and (max-width: 959px) {
   main { padding-left: max(24px, env(safe-area-inset-left, 0px)); padding-right: max(24px, env(safe-area-inset-right, 0px)); }
 }
+
+/* ---- District overview: patterns (hotspots, seasons, time of day) ----
+   One sequential palette for "how much": a single purple hue, light to
+   dark on light themes and dark to light on dark ones, so order reads by
+   lightness alone (colour-blind safe) and it never clashes with the
+   severity colours or the blue streams. Each step of the light and dark
+   ramps was checked: monotone lightness, visible steps, and the faintest
+   step at least 2:1 against the card surface of every theme. */
+:root {
+  --heat1: #d68fcb; --heat2: #bb5fb0; --heat3: #97398f; --heat4: #73226e; --heat5: #4f1250;
+  --band: rgb(30 40 80 / 0.07);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --heat1: #7d3a80; --heat2: #a052a3; --heat3: #c374c4; --heat4: #e09ce0; --heat5: #f6c8f3; --band: rgb(150 170 255 / 0.09); }
+}
+:root[data-theme="dark"], :root[data-skin="dark"], :root[data-skin="navy"] {
+  --heat1: #7d3a80; --heat2: #a052a3; --heat3: #c374c4; --heat4: #e09ce0; --heat5: #f6c8f3; --band: rgb(150 170 255 / 0.09);
+}
+:root[data-skin="white"] { --heat1: #d68fcb; --heat2: #bb5fb0; --heat3: #97398f; --heat4: #73226e; --heat5: #4f1250; --band: rgb(30 40 80 / 0.07); }
+.heat1 { --heat: var(--heat1); } .heat2 { --heat: var(--heat2); } .heat3 { --heat: var(--heat3); } .heat4 { --heat: var(--heat4); } .heat5 { --heat: var(--heat5); }
+
+.patterns { display: grid; gap: 20px; min-width: 0; }
+.section-title { font-size: 1.45rem; margin-top: 8px; }
+.pat-filter { display: grid; gap: 6px; }
+.map .cell { fill: var(--heat); fill-opacity: 0.72; stroke: var(--heat); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.legend .heatkey { display: inline-flex; align-items: center; gap: 0; }
+.legend .heatkey .hk:first-of-type { margin-left: 6px; }
+.legend .heatkey .hk:last-of-type { margin-right: 6px; }
+.hk { display: inline-block; width: 14px; height: 12px; background: var(--heat); margin: 0; vertical-align: -1px; }
+.hot-score .hk { border-radius: 3px; margin-right: 6px; }
+
+.hot { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: hot; }
+.hot li { display: grid; gap: 4px; counter-increment: hot; min-width: 0; }
+.hot-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.hot-head b::before { content: counter(hot) ". "; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hot-score { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hot small { color: var(--muted); overflow-wrap: anywhere; }
+.hot-bar { width: 100%; height: 8px; display: block; }
+.hot-bar .track { fill: var(--sunken); }
+.hot-bar .fill { fill: var(--heat); }
+
+.chart.cols .band { fill: var(--band); }
+.chart.cols .bandlabel { fill: var(--muted); font: 700 10px var(--font-body); letter-spacing: 0.06em; text-transform: uppercase; }
+.chart.cols .peak { fill: var(--ink); font-weight: 700; }
+
+.tbl-fold > summary { font-size: 0.9rem; }
+.tblwrap { overflow-x: auto; margin-top: 8px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.tbl caption { text-align: left; font-weight: 700; padding-bottom: 6px; color: var(--muted); }
+.tbl th, .tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; font-weight: 400; white-space: nowrap; }
+.tbl thead th { font-weight: 700; color: var(--muted); font-size: 0.8rem; }
+.tbl tbody th { font-weight: 700; }
+.tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* phones: the 420-unit-wide charts shrink, so draw their labels larger */
+@media (max-width: 599px) {
+  .chart.cols text { font-size: 15px; }
+  .chart.cols .bandlabel { font-size: 13px; }
+  .patterns .kpi b { font-size: 1.45rem; }
+}

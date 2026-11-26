@@ -240,6 +240,40 @@ export interface Stats {
   casualties: number;
 }
 
+/** Counts per incident type, every type present (zeros included). */
+export type TypeCounts = Record<IncidentType, number>;
+
+/** GET /api/stats/patterns (officers): hotspots, seasons and time of day.
+    False reports are left out; sample rows only with sample=1. */
+export interface Patterns {
+  /** Calendar months back, this one included; 0 = all time. */
+  months: number;
+  since: number | null;
+  until: number;
+  include_sample: boolean;
+  /** Sample reports in the period, whether included or not. */
+  sample_reports: number;
+  false_reports: number;
+  total: number;
+  score: number;
+  first_at: number | null;
+  weights: Record<Severity, number>;
+  /** Night is from_hour:00 to to_hour:00 IST. */
+  night: { from_hour: number; to_hour: number; count: number; day_count: number };
+  types: { key: IncidentType; label: string; count: number; score: number }[];
+  /** Ranked by severity score, then count. */
+  villages: { name: string; count: number; score: number; night: number; types: TypeCounts; last_at: number }[];
+  /** Jan..Dec (month 1..12), added up across years, in IST. */
+  months_of_year: { month: number; count: number; types: TypeCounts }[];
+  /** 0..23, IST. */
+  hours: { hour: number; count: number; types: TypeCounts }[];
+  cell_km: number;
+  /** UTM zone 46N squares; e, n = south-west corner in km. */
+  cells: GridCell[];
+}
+
+export interface GridCell { e: number; n: number; count: number; score: number }
+
 /** POST /api/users/:id/reset-pin */
 export interface PinReset {
   temp_pin: string;

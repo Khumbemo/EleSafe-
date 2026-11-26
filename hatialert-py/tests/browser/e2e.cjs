@@ -53,6 +53,33 @@ const BASE = process.argv[2]; const SHOTS = process.argv[3];
     await p.click('#csv'); await p.waitForSelector('#csv-text'); const v = await p.inputValue('#csv-text'); if (!v.startsWith('report_no')) throw Error(v.slice(0, 50));
     if (SHOTS) await p.screenshot({ path: SHOTS + '/5-dash.png', fullPage: true });
   });
+  await step('patterns: real reports only by default, honest about a small count', async () => {
+    await p.goto(BASE + (process.env.PREVIEW ? 'test.html' : '') + '#/dashboard'); await p.waitForSelector('#pat-hours');
+    const basis = await p.innerText('#pat-basis'); if (!/Based on 1 report since .+ False reports are left out/.test(basis)) throw Error(basis);
+    if (!(await p.$('#pat-few'))) throw Error('no small-sample notice');
+    if (await p.isChecked('#pat-sample')) throw Error('sample included by default');
+    if (await p.$('#pat-sample-note')) throw Error('sample note shown');
+  });
+  await step('patterns: include sample data, charts, map squares and tables', async () => {
+    await p.check('#pat-sample'); await p.waitForSelector('#pat-sample-note');
+    const basis = await p.innerText('#pat-basis'); const n = +basis.match(/Based on (\d+) reports/)[1]; if (n < 60) throw Error(basis);
+    if (await p.$('#pat-few')) throw Error('small-sample notice with ' + n);
+    const villages = await p.$$eval('#pat-villages .hot li', (e) => e.length); if (villages < 5) throw Error('villages ' + villages);
+    const cells = await p.$$eval('#pat-map .map .cell', (e) => e.length); if (cells < 5) throw Error('cells ' + cells);
+    const months = await p.$$eval('#pat-months svg.chart rect.bar', (e) => e.length); if (months !== 12) throw Error('month bars ' + months);
+    const hours = await p.$$eval('#pat-hours svg.chart rect.bar', (e) => e.length); if (hours !== 24) throw Error('hour bars ' + hours);
+    const bands = await p.$$eval('#pat-hours svg.chart rect.band', (e) => e.length); if (bands !== 2) throw Error('night bands ' + bands);
+    const t = await p.innerText('#pat-hours'); if (!/Night is 18:00 to 06:00 IST/.test(t) || !/\d+ \(\d+%\)/.test(t)) throw Error(t.slice(0, 200));
+    await p.click('#pat-hours summary'); const rows = await p.$$eval('#pat-hours table tbody tr', (e) => e.length); if (rows !== 24) throw Error('hour rows ' + rows);
+    for (const id of ['#pat-months', '#pat-hours', '#pat-map']) if (!(await p.getAttribute(id + ' svg[role=img]', 'aria-label'))) throw Error('no text alternative ' + id);
+    if (SHOTS) await p.screenshot({ path: SHOTS + '/5b-patterns.png', fullPage: true });
+  });
+  await step('patterns: type filter and all-time period', async () => {
+    await p.click('#pat-types [data-ptype=crop_raid]'); await p.waitForSelector('#pat-types [data-ptype=crop_raid][aria-pressed=true]');
+    const t = await p.innerText('#pat-months'); if (!/Crop raid by month/.test(t)) throw Error(t.slice(0, 120));
+    await p.click('[data-pmonths="0"]'); await p.waitForSelector('[data-pmonths="0"][aria-pressed=true]');
+    const b = await p.innerText('#pat-basis'); if (!/from all time/.test(b)) throw Error(b);
+  });
   await step('officer resolves path', async () => {
     await p.goto(BASE + (process.env.PREVIEW ? 'test.html' : '') + '#/cases'); await p.waitForSelector('.item'); await p.click('.item >> nth=0'); await p.waitForSelector('#act');
     for (const s of ['responded', 'resolved']) { await p.click(`[data-status=${s}]`); await p.waitForSelector('text=Status updated'); await p.waitForTimeout(300); }

@@ -2,7 +2,7 @@
 "use strict";
 (() => {
   // src/sw.ts
-  var VERSION = "hatialert-v4";
+  var VERSION = "hatialert-v5";
   var FONTS = [
     "atkinson-hyperlegible-latin-400-normal",
     "atkinson-hyperlegible-latin-700-normal",

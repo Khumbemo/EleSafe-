@@ -139,16 +139,16 @@ fun VoiceRecordButton(enabled: Boolean, onDone: (ByteArray) -> Unit, onError: (S
     if (recording) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(String.format(Locale.ROOT, "Recording %d:%02d / %d:%02d", seconds / 60, seconds % 60, max / 60, max % 60), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-            OutlinedButton(onClick = { finish() }) { Text("Stop") }
+            OutlinedButton(onClick = { finish() }) { Text(tr("Stop")) }
             TextButton(onClick = {
                 recording = false
                 recorder.cancel()
-            }) { Text("Cancel") }
+            }) { Text(tr("Cancel")) }
         }
     } else {
         OutlinedButton(enabled = enabled, onClick = {
             if (VoiceRecorder.hasPermission(context)) begin() else permission.launch(VoiceRecorder.PERMISSION)
-        }) { Text("Record voice note") }
+        }) { Text(tr("Record voice note")) }
     }
 }
 
@@ -173,10 +173,10 @@ fun VoicePlayButton(key: Any, mime: String, label: String, load: suspend () -> B
                     problem = if (playing) null else "This phone can't play that recording."
                 }
             }
-        }) { Text(if (playing) "Stop" else "Play") }
+        }) { Text(tr(if (playing) "Stop" else "Play")) }
         Column {
-            Text(label)
-            problem?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+            Text(tr(label))
+            problem?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
         }
     }
 }
@@ -198,9 +198,9 @@ private fun PhotoThumb(a: Attachment, vm: AppViewModel, onOpen: () -> Unit) {
     ) {
         val b = bmp
         if (b != null) {
-            Image(b.asImageBitmap(), contentDescription = "Photo, tap to see it full size", contentScale = ContentScale.Crop, modifier = Modifier.size(104.dp))
+            Image(b.asImageBitmap(), contentDescription = tr("Photo, tap to see it full size"), contentScale = ContentScale.Crop, modifier = Modifier.size(104.dp))
         } else {
-            Text("Loading...", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+            Text(tr("Loading…"), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
         }
     }
 }
@@ -217,9 +217,9 @@ private fun PhotoViewer(id: Long, vm: AppViewModel, onClose: () -> Unit) {
         Box(Modifier.fillMaxSize().background(Color.Black).clickable(onClick = onClose), contentAlignment = Alignment.Center) {
             val b = bmp
             if (b != null) {
-                Image(b.asImageBitmap(), contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                Image(b.asImageBitmap(), contentDescription = tr("Photo"), contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             } else {
-                Text("Loading...", color = Color.White)
+                Text(tr("Loading…"), color = Color.White)
             }
         }
     }
@@ -250,10 +250,10 @@ fun CaseMedia(i: Incident, vm: AppViewModel) {
     val canAttach = i.canAttach == true
     if (i.attachments.isEmpty() && !canAttach) return
 
-    Text("Photos and voice notes", style = MaterialTheme.typography.titleMedium)
+    Text(tr("Photos and voice notes"), style = MaterialTheme.typography.titleMedium)
     val photos = i.attachments.filter { it.kind == MediaKind.PHOTO.key() }
     val voices = i.attachments.filter { it.kind == MediaKind.VOICE.key() }
-    if (i.attachments.isEmpty()) Text("None yet.", style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
+    if (i.attachments.isEmpty()) Text(tr("None yet."), style = MaterialTheme.typography.bodySmall, color = argb(p.muted))
     if (photos.isNotEmpty()) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             for (a in photos) PhotoThumb(a, vm) { viewing = a.id }
@@ -264,7 +264,7 @@ fun CaseMedia(i: Incident, vm: AppViewModel) {
     }
     if (canAttach) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            OutlinedButton(enabled = photos.size < MediaKind.PHOTO.maxCount(), onClick = takePhoto) { Text("Add photo") }
+            OutlinedButton(enabled = photos.size < MediaKind.PHOTO.maxCount(), onClick = takePhoto) { Text(tr("Add photo")) }
             VoiceRecordButton(
                 enabled = voices.size < MediaKind.VOICE.maxCount(),
                 onDone = { bytes -> vm.act { c.attachToCase(i.id, MediaKind.VOICE, bytes) } },
@@ -272,7 +272,7 @@ fun CaseMedia(i: Incident, vm: AppViewModel) {
             )
         }
     }
-    note?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(top = 2.dp)) }
+    note?.let { Text(tr(it), style = MaterialTheme.typography.bodySmall, color = argb(p.muted), modifier = Modifier.padding(top = 2.dp)) }
     viewing?.let { id -> PhotoViewer(id, vm) { viewing = null } }
 }
 

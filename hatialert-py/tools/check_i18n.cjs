@@ -31,6 +31,18 @@ const SAMPLES = [
   "Alert sent. Texting 1 person", "Text me alerts for Wozhuro", "2 wrong PINs today", "Last seen 5 min ago", "Temporary PIN for",
   "8 village positions are not checked yet. Distances and alert areas depend on them.", "Imported: 1 added, 1 updated",
   "Skipped 1 line with a problem: 4", "2 people", "1 incident", "Sent: 1", "6 elephants",
+  // District overview patterns
+  "Based on 78 reports since December 2025. False reports are left out.", "Based on 1 report from all time. False reports are left out.",
+  "Include 78 sample reports", "Only 5 reports so far: read these as counts, not as trends.",
+  "Ranked by severity score: each report counts critical 4, high 3, medium 2, low 1.", "score 32",
+  "15 reports, 8 at night", "2 more villages with fewer reports.",
+  "Reports grouped into 2 × 2 km squares of the UTM zone 46N grid, shaded by severity score. 34 squares had reports.",
+  "Map of 34 grid squares with reports, shaded by severity score", "Busiest 2 km squares", "2 km squares: fewer",
+  "All reports by month, over the last 12 months.", "Crop raid by month, added up across all years.",
+  "All reports by month of the year. Busiest: August.", "Busiest: August (16 reports).",
+  "All reports by hour of the day, Indian Standard Time. Night is 18:00 to 06:00 IST (shaded).",
+  "All reports by hour of the day. 54 of 78 at night.", "18:00 to 06:00", "21:00 to 22:00: 3 reports", "21:00–22:00 (night)",
+  "All reports by month", "Crop raid by hour (IST)", "August: 16 reports",
 ];
 const compiled = N.patterns.map(([re, tpl]) => [new RegExp("^" + re + "$"), re]);
 for (const [rx, re] of compiled) if (!SAMPLES.some((t) => rx.test(t))) { console.log("PATTERN MATCHES NO SAMPLE", re); bad++; }

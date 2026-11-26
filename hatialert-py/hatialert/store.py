@@ -480,6 +480,15 @@ class Store:
             f"SELECT * FROM incidents WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?", (*args, limit)
         )
 
+    def pattern_incidents(self, since=None) -> list[dict]:
+        """The columns the officers' pattern charts need, oldest first; `since` None = all time."""
+        where, args = ("created_at >= ?", (since,)) if since is not None else ("1=1", ())
+        return self.all(
+            f"""SELECT id, type, severity, status, village, lat, lng, sample, created_at FROM incidents
+                WHERE {where} ORDER BY created_at, id""",
+            args,
+        )
+
     def events(self, iid) -> list[dict]:
         return self.all(
             """SELECT e.*, u.name AS user_name, u.role AS user_role FROM events e
@@ -529,7 +538,8 @@ class Store:
             self.db.execute("DELETE FROM incidents WHERE sample = 1")
 
     def seed(self, at: int | None = None):
-        """Demo accounts plus a month of example incidents, all flagged sample."""
+        """Demo accounts, a month of example incidents and a year of older closed
+        ones (for the officers' pattern charts), all flagged sample."""
         t = at or now_ms()
         H, D = domain.HOUR_MS, domain.DAY_MS
         users = {
@@ -572,6 +582,7 @@ class Store:
             ids.append(iid)
             for status, hours, who, note in history:
                 self.add_event(iid, status, note, by[who], int(created + hours * H), new_status=status)
+        self._seed_history(t, by)
         self.add_alert(
             "warning",
             "Herd of about 12 elephants moving east from Tening along the ridge road. Keep away from fields after dark.",
@@ -579,3 +590,70 @@ class Store:
         )
         self.add_alert("info", "Forest guards are patrolling Sanis and Ralan tonight.", ["Sanis", "Ralan"], None, officer, int(t - 5 * H), sample=1)
         self.add_alert("all_clear", "The herd near Englan has moved back into the reserve forest.", ["Englan"], ids[6], officer, int(t - 6 * D), sample=1)
+
+    def _seed_history(self, t: int, by: dict):
+        """About 70 older, closed sample reports spread over the past year (46 to 364
+        days back), so hotspots, seasons and night-time patterns show in the demo.
+        Deterministic for a given `t`. More crop raids while paddy ripens
+        (Aug-Nov) and mostly after dark; a few villages see most of them. No
+        reporter: they stand for villagers who are not demo accounts."""
+        H, D = domain.HOUR_MS, domain.DAY_MS
+        x = [20261120]
+
+        def rnd() -> float:
+            x[0] = (x[0] * 1103515245 + 12345) % 2**31
+            return x[0] / 2**31
+
+        def pick(weights: dict):
+            r, acc = rnd() * sum(weights.values()), 0.0
+            for k, w in weights.items():
+                acc += w
+                if r < acc:
+                    return k
+            return k
+
+        month_w = {1: 2, 2: 1, 3: 1, 4: 2, 5: 3, 6: 4, 7: 6, 8: 7, 9: 9, 10: 10, 11: 8, 12: 3}
+        village_w = {"Baghty": 9, "Ralan": 7, "Wozhuro": 6, "Tening": 6, "Sanis": 4, "Englan": 3,
+                     "Longsa": 3, "Wosanda": 2, "Bhandari": 2, "Wokha Town": 1}
+        type_w = {"crop_raid": 11, "sighting": 4, "herd_movement": 3, "property_damage": 2, "injury": 1}
+        night = [19, 20, 21, 21, 22, 22, 23, 23, 0, 0, 1, 1, 2, 3, 4, 5, 18, 17]
+        day = [5, 6, 6, 7, 8, 9, 10, 14, 16, 17, 17, 18, 18, 19, 20, 21]
+        hours = {"crop_raid": night, "property_damage": night, "injury": [5, 6, 18, 19, 20], "sighting": day, "herd_movement": day}
+        places = {"crop_raid": ["Paddy fields", "Maize plots", "Jhum field", "Banana grove"],
+                  "property_damage": ["Granary hut", "Field hut and fence", "Water tank"],
+                  "injury": ["Footpath to the fields"], "sighting": ["Forest edge", "River bank"],
+                  "herd_movement": ["Ridge road", "Crossing the state road"]}
+        made = 0
+        while made < 70:
+            ago = 46 + int(rnd() * 319)
+            noon = t - ago * D
+            if rnd() * 10 >= month_w[domain.ist_month_hour(noon)[1]]:
+                continue
+            kind, village = pick(type_w), pick(village_w)
+            hour = hours[kind][int(rnd() * len(hours[kind]))]
+            midnight = noon - (noon + 19_800_000) % D
+            created = midnight + hour * H + int(rnd() * 60) * 60_000
+            herd = 1 + int(rnd() * 12)
+            cas = 1 if kind == "injury" else 0
+            v = self.village(village)
+            lat, lng = domain.destination(v["lat"], v["lng"], round(0.3 + rnd() * 2.2, 1), domain.DIRECTIONS[int(rnd() * 8)])
+            iid = self.add_incident(
+                {
+                    "type": kind, "severity": domain.classify_severity(kind, herd, cas),
+                    "herd_size": herd, "casualties": cas,
+                    "crop_acres": round(0.2 + rnd() * 2.8, 1) if kind == "crop_raid" else 0,
+                    "property_inr": [8000, 15000, 25000, 40000][int(rnd() * 4)] if kind == "property_damage" else 0,
+                    "heading": "", "village": village, "lat": lat, "lng": lng,
+                    "place": places[kind][int(rnd() * len(places[kind]))], "description": "",
+                },
+                None, created, sample=1,
+            )
+            if kind == "sighting" and rnd() < 0.25:
+                self.add_event(iid, "false_report", "", by["g"], created + 3 * H, new_status="false_report")
+            else:
+                v_at = created + int((0.5 + rnd() * 3.5) * H)
+                r_at = v_at + int((1 + rnd() * 5) * H)
+                self.add_event(iid, "verified", "", by["g"], v_at, new_status="verified")
+                self.add_event(iid, "responded", "", by["g"], r_at, new_status="responded")
+                self.add_event(iid, "resolved", "", by["o"], r_at + int((24 + rnd() * 72) * H), new_status="resolved")
+            made += 1
