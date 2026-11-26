@@ -1,0 +1,9 @@
+# Real settings and secrets: never commit.
+.env
+# Local copies made by backup-offsite.sh and restore.sh
+offsite-staging/
+*.db
+*.db-wal
+*.db-shm
+# The template is meant to be committed (the repository ignores .env.*).
+!.env.example

@@ -1,0 +1,71 @@
+# HatiAlert as a systemd service (install without Docker).
+#
+# Install (as root), see deploy/README.md "Without Docker" for the full steps:
+#   useradd --system --home-dir /var/lib/hatialert --shell /usr/sbin/nologin hatialert
+#   git clone <repository> /opt/hatialert          # code stays owned by root
+#   install -d -m 0750 /etc/hatialert
+#   install -m 0600 /dev/null /etc/hatialert/hatialert.env   # SMS settings go here
+#   cp /opt/hatialert/hatialert-py/deploy/hatialert.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now hatialert
+#
+# The app listens on 127.0.0.1:8000 only; Caddy on the same machine serves HTTPS.
+[Unit]
+Description=HatiAlert elephant-incident reporting server
+Documentation=file:///opt/hatialert/hatialert-py/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hatialert
+Group=hatialert
+WorkingDirectory=/opt/hatialert/hatialert-py
+# HATIALERT_SMS_* settings (secrets): root-owned, mode 0600. The leading "-"
+# lets the service start before the file exists.
+EnvironmentFile=-/etc/hatialert/hatialert.env
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -m hatialert serve --host 127.0.0.1 --port 8000 --trust-proxy --no-demo \
+    --db /var/lib/hatialert/hatialert.db \
+    --backup-dir /var/lib/hatialert/backups --backup-hours 24 --keep 14
+# Python shuts down cleanly on SIGINT (Ctrl+C).
+KillSignal=SIGINT
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+# /var/lib/hatialert, created and owned by the hatialert user (mode 0700).
+StateDirectory=hatialert
+StateDirectoryMode=0700
+UMask=0077
+
+# Hardening: the service can only write its state directory and only open
+# network sockets; check with "systemd-analyze security hatialert".
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

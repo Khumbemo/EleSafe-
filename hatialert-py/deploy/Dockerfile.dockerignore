@@ -1,0 +1,10 @@
+# Build context is hatialert-py/; the image only copies hatialert/ and
+# deploy/entrypoint.sh, so keep everything else out of the context.
+**
+!hatialert/
+!deploy/entrypoint.sh
+**/__pycache__
+**/*.pyc
+**/*.db
+**/*.db-wal
+**/*.db-shm

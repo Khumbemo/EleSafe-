@@ -1,0 +1,49 @@
+# Caddy in front of HatiAlert: HTTPS, compression, a few extra headers.
+#
+# Settings come from the environment (compose.yaml passes them from .env):
+#   HATIALERT_DOMAIN     e.g. hatialert.example.org ("localhost" for a local test,
+#                        which uses Caddy's own local certificate authority)
+#   ACME_EMAIL           address Let's Encrypt writes to about certificate problems
+#   HATIALERT_UPSTREAM   where the app listens (Compose: hatialert:8000;
+#                        on a host install: 127.0.0.1:8000, the default here)
+{
+	email {$ACME_EMAIL}
+
+	# Only if Caddy itself sits behind another proxy or load balancer: list
+	# that proxy's addresses so Caddy passes on the real client address.
+	# servers {
+	# 	trusted_proxies static 10.0.0.0/8
+	# }
+}
+
+{$HATIALERT_DOMAIN} {
+	# Government server with its own certificate instead of Let's Encrypt:
+	# tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
+
+	encode zstd gzip
+
+	# The app refuses bodies over 20 MiB itself (with a readable message);
+	# this stops anything much larger before it reaches the app.
+	request_body {
+		max_size 21MiB
+	}
+
+	# The app sends its own Content-Security-Policy, X-Frame-Options,
+	# Referrer-Policy, Permissions-Policy and nosniff headers; Caddy does not
+	# touch those. It only adds HSTS and hides server version strings.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+		defer
+	}
+
+	# Caddy replaces any X-Forwarded-For sent by the client with the address
+	# it actually sees, so the app (run with --trust-proxy) rate-limits each
+	# phone by its own address and clients cannot fake one.
+	reverse_proxy {$HATIALERT_UPSTREAM:127.0.0.1:8000}
+
+	log {
+		output stdout
+		format json
+	}
+}

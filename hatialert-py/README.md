@@ -18,10 +18,31 @@ python -m hatialert --port 9000 --db /path/to/hatialert.db
 python -m hatialert --no-demo  # empty database, no demo accounts
 python -m hatialert --backup-dir /srv/hatialert-backups --backup-hours 24 --keep 14
 python -m hatialert backup --db hatialert.db --backup-dir /srv/hatialert-backups   # one-off, e.g. from cron
+python -m hatialert create-officer --db hatialert.db --phone 98XXXXXXXX --name "Full Name" --village "Wokha Town"
 ```
 
 Behind a reverse proxy (needed for HTTPS), add `--trust-proxy` so rate limits
 see each phone's own address.
+
+### On a server
+
+[`deploy/`](deploy/README.md) has everything for a real server, with a
+step-by-step guide: a Docker image (standard library only, non-root, health
+check), Docker Compose with Caddy for automatic HTTPS (Let's Encrypt),
+settings in a git-ignored `.env`, off-server backups and restore, and a
+hardened systemd unit for servers without Docker.
+
+```sh
+cd hatialert-py/deploy
+cp .env.example .env            # set HATIALERT_DOMAIN and ACME_EMAIL
+docker compose up -d --build
+docker compose exec hatialert hatialert-entrypoint create-officer --phone 98XXXXXXXX --name "Full Name" --village "Wokha Town"
+```
+
+`create-officer` makes an officer account with a temporary PIN that must be
+changed at the first sign-in (or promotes an existing account, keeping its
+PIN). It is how the first officer is made on a server started with
+`--no-demo`.
 
 ### On phones and tablets
 
@@ -139,9 +160,11 @@ hatialert/
   sms.py        SMS sending (any HTTP provider) with retries
   geo.py        WGS 84 <-> UTM zone 46N
   server.py     http.server front end with security headers
+  __main__.py   command line: serve, backup, create-officer
   web/          index.html, app.css; app.js, nagamese.js, sw.js are built from web-ts/ (committed)
 web-ts/         TypeScript source of the browser client (see "Browser client")
 tests/          unittest suite: python -m unittest
+deploy/         Docker, Compose + Caddy (HTTPS), systemd unit, backup and restore scripts
 tools/          map build (map-source/ = downloaded inputs), preview build, parity and i18n checks
 preview/        built preview: the app running in the browser with Pyodide (see preview/README.md)
 ```
@@ -224,9 +247,24 @@ Set these before starting the server (any provider with an HTTP API):
 | `HATIALERT_SMS_PREFIX` | put before the 10-digit number, default `+91` |
 | `HATIALERT_SMS_DEBUG=1` | print messages to the console instead (testing) |
 
-Failed sends are retried after 1, 5, 15 and 60 minutes, then marked failed
-for an officer to retry. Indian bulk SMS needs a DLT-registered sender and
-templates; set those up with your provider.
+Each message is one POST with `Content-Type: application/json`; any 2xx
+answer counts as sent. Failed sends are retried after 1, 5, 15 and 60
+minutes, then marked failed for an officer to retry.
+
+**India (TRAI DLT):** under TRAI's commercial-communication rules (TCCCPR
+2018), the sending organisation, its sender ID ("header") and the exact
+wording of every message template must be registered on a telecom operator's
+DLT platform before bulk SMS are delivered; messages that don't match a
+registered template are dropped. The texts HatiAlert sends:
+
+| When | Text |
+|---|---|
+| Sign-up / forgotten-PIN code | `HatiAlert code: {code}. It expires in 10 minutes. Do not share it.` |
+| Alert | `HatiAlert {Elephant warning / Information / All clear} ({villages}): {message}` |
+
+[`deploy/README.md`](deploy/README.md#6-text-messages-sms) explains the DLT
+steps and how to map a provider's API onto these settings, including what to
+check (field names, number format, template IDs, error replies).
 
 ## Map data
 
@@ -258,12 +296,17 @@ pyshp and contourpy for the build only):
 - **Connect an SMS provider** (see above) so alerts reach people whose app is
   closed and sign-ups prove they own the number. Until then alerts must be
   texted by hand from Admin › Messages.
-- **Make the first real officer:** register normally, then run
-  `sqlite3 hatialert.db "UPDATE users SET role='officer' WHERE phone='…'"`
-  once; after that, officers manage roles in Admin › People. Start with
-  `--no-demo` (or remove the demo accounts) on a real server.
-- Run it behind HTTPS (for example a reverse proxy) when it's on a network.
-  Browsers only allow the live camera and microphone on HTTPS or localhost;
-  on plain HTTP the app falls back to the phone's camera and recorder apps.
+- **Make the first real officer:** start with `--no-demo` (the Docker setup in
+  `deploy/` does) and run `python -m hatialert create-officer --phone … --name
+  … --village …` once; it prints a temporary PIN that must be changed at the
+  first sign-in. After that, officers manage roles in Admin › People. Never
+  run a real server on a database that has the demo accounts.
+- Run it behind HTTPS when it's on a network (`deploy/`: Caddy with
+  Let's Encrypt). Browsers only allow the live camera and microphone on HTTPS
+  or localhost; on plain HTTP the app falls back to the phone's camera and
+  recorder apps.
 - Photos and voice notes are stored inside the SQLite file, so turn on
-  `--backup-dir` and copy the backups off the machine now and then.
+  `--backup-dir` and copy the backups off the machine every night
+  (`deploy/backup-offsite.sh`); practise a restore (`deploy/restore.sh`) once.
+- The full go-live checklist is at the end of
+  [`deploy/README.md`](deploy/README.md#checklist-before-real-use).
